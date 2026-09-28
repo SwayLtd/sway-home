@@ -1,0 +1,50 @@
+# deps
+node_modules/
+.pnp*
+bun.lockb.bak
+
+# builds
+dist/
+build/
+.output/
+.nuxt/
+.nitro/
+.cache/
+*.tsbuildinfo
+
+# env + secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# local data (SQLite, blobs, models, captures)
+data/
+!data/.gitkeep
+storage/
+models/
+*.sqlite
+*.sqlite3
+*.db
+*.db-shm
+*.db-wal
+
+# logs + tmp
+logs/
+*.log
+tmp/
+.tmp/
+coverage/
+
+# os / editor
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# artefacts produced by the agent test harness
+artifacts/
+screenshots/

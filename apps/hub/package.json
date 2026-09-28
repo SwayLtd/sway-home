@@ -1,0 +1,151 @@
+{
+  "name": "@sway-home/hub",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "license": "UNLICENSED",
+  "scripts": {
+    "start": "bun bin/server.ts",
+    "build": "node ace build",
+    "dev": "bun --watch bin/server.ts",
+    "test": "node ace test",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "typecheck": "tsc --noEmit",
+    "dev:node": "node ace serve --hmr",
+    "db:migrate": "bun run app/db/migrate.ts",
+    "db:reset": "bun run app/db/migrate.ts --reset",
+    "scan": "bun run ../../scripts/scan.ts --full"
+  },
+  "imports": {
+    "#controllers/*": {
+      "bun": "./app/controllers/*.ts",
+      "default": "./app/controllers/*.js"
+    },
+    "#exceptions/*": {
+      "bun": "./app/exceptions/*.ts",
+      "default": "./app/exceptions/*.js"
+    },
+    "#models/*": {
+      "bun": "./app/models/*.ts",
+      "default": "./app/models/*.js"
+    },
+    "#mails/*": {
+      "bun": "./app/mails/*.ts",
+      "default": "./app/mails/*.js"
+    },
+    "#services/*": {
+      "bun": "./app/services/*.ts",
+      "default": "./app/services/*.js"
+    },
+    "#listeners/*": {
+      "bun": "./app/listeners/*.ts",
+      "default": "./app/listeners/*.js"
+    },
+    "#events/*": {
+      "bun": "./app/events/*.ts",
+      "default": "./app/events/*.js"
+    },
+    "#middleware/*": {
+      "bun": "./app/middleware/*.ts",
+      "default": "./app/middleware/*.js"
+    },
+    "#validators/*": {
+      "bun": "./app/validators/*.ts",
+      "default": "./app/validators/*.js"
+    },
+    "#providers/*": {
+      "bun": "./providers/*.ts",
+      "default": "./providers/*.js"
+    },
+    "#policies/*": {
+      "bun": "./app/policies/*.ts",
+      "default": "./app/policies/*.js"
+    },
+    "#abilities/*": {
+      "bun": "./app/abilities/*.ts",
+      "default": "./app/abilities/*.js"
+    },
+    "#database/*": {
+      "bun": "./database/*.ts",
+      "default": "./database/*.js"
+    },
+    "#start/*": {
+      "bun": "./start/*.ts",
+      "default": "./start/*.js"
+    },
+    "#tests/*": {
+      "bun": "./tests/*.ts",
+      "default": "./tests/*.js"
+    },
+    "#config/*": {
+      "bun": "./config/*.ts",
+      "default": "./config/*.js"
+    },
+    "#discovery/*": {
+      "bun": "../../packages/discovery/src/*.ts",
+      "default": "../../packages/discovery/src/*.js"
+    },
+    "#shared/*": {
+      "bun": "../../packages/shared/src/*.ts",
+      "default": "../../packages/shared/src/*.js"
+    },
+    "#adapters/*": {
+      "bun": "./app/adapters/*.ts",
+      "default": "./app/adapters/*.js"
+    },
+    "#agent/*": {
+      "bun": "./app/agent/*.ts",
+      "default": "./app/agent/*.js"
+    },
+    "#db/*": {
+      "bun": "./app/db/*.ts",
+      "default": "./app/db/*.js"
+    },
+    "#repositories/*": {
+      "bun": "./app/repositories/*.ts",
+      "default": "./app/repositories/*.js"
+    }
+  },
+  "devDependencies": {
+    "@adonisjs/assembler": "^7.8.2",
+    "@adonisjs/eslint-config": "^2.0.0",
+    "@adonisjs/prettier-config": "^1.4.4",
+    "@adonisjs/tsconfig": "^1.4.0",
+    "@japa/api-client": "^3.1.0",
+    "@japa/assert": "^4.0.1",
+    "@japa/plugin-adonisjs": "^4.0.0",
+    "@japa/runner": "^4.2.0",
+    "@swc/core": "1.11.24",
+    "@types/better-sqlite3": "^9.6.0",
+    "@types/luxon": "^3.7.5",
+    "@types/node": "^22.15.18",
+    "eslint": "^9.26.0",
+    "fast-srp-hap": "2.0.4",
+    "hap-nodejs": "0.14.3",
+    "hot-hook": "^0.4.0",
+    "pino-pretty": "^13.0.0",
+    "prettier": "^3.5.3",
+    "ts-node-maintained": "^10.9.5",
+    "typescript": "~5.8"
+  },
+  "dependencies": {
+    "@adonisjs/auth": "^9.4.0",
+    "@adonisjs/core": "^6.18.0",
+    "@adonisjs/cors": "^2.2.1",
+    "@adonisjs/lucid": "^22.4.2",
+    "@matter/main": "0.17.9",
+    "@project-chip/matter.js": "0.17.9",
+    "@vinejs/vine": "^3.0.1",
+    "better-sqlite3": "^13.0.3",
+    "luxon": "^3.7.2",
+    "reflect-metadata": "^0.2.2"
+  },
+  "hotHook": {
+    "boundaries": [
+      "./app/controllers/**/*.ts",
+      "./app/middleware/*.ts"
+    ]
+  },
+  "prettier": "@adonisjs/prettier-config"
+}

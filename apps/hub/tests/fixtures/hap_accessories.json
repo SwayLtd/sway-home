@@ -1,0 +1,939 @@
+{
+ "accessories": [
+  {
+   "aid": 1,
+   "services": [
+    {
+     "type": "3E",
+     "iid": 1,
+     "characteristics": [
+      {
+       "type": "14",
+       "iid": 2,
+       "perms": [
+        "pw"
+       ],
+       "description": "Identify",
+       "format": "bool"
+      },
+      {
+       "type": "20",
+       "iid": 3,
+       "value": "Sway Test",
+       "perms": [
+        "pr"
+       ],
+       "description": "Manufacturer",
+       "format": "string",
+       "maxLen": 64
+      },
+      {
+       "type": "21",
+       "iid": 4,
+       "value": "Pont de test",
+       "perms": [
+        "pr"
+       ],
+       "description": "Model",
+       "format": "string",
+       "maxLen": 64
+      },
+      {
+       "type": "23",
+       "iid": 5,
+       "value": "Pont HomeKit E99B",
+       "perms": [
+        "pr"
+       ],
+       "description": "Name",
+       "format": "string",
+       "maxLen": 64
+      },
+      {
+       "type": "30",
+       "iid": 6,
+       "value": "bridge-CC:22:3D:E3:CE:F8",
+       "perms": [
+        "pr"
+       ],
+       "description": "Serial Number",
+       "format": "string",
+       "maxLen": 64
+      },
+      {
+       "type": "52",
+       "iid": 7,
+       "value": "1.2.3",
+       "perms": [
+        "pr"
+       ],
+       "description": "Firmware Revision",
+       "format": "string"
+      }
+     ]
+    },
+    {
+     "type": "A2",
+     "iid": 2000000008,
+     "characteristics": [
+      {
+       "type": "37",
+       "iid": 9,
+       "value": "1.1.0",
+       "perms": [
+        "pr"
+       ],
+       "description": "Version",
+       "format": "string",
+       "maxLen": 64
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "aid": 2,
+   "services": [
+    {
+     "type": "3E",
+     "iid": 1,
+     "characteristics": [
+      {
+       "type": "14",
+       "iid": 2,
+       "perms": [
+        "pw"
+       ],
+       "description": "Identify",
+       "format": "bool"
+      },
+      {
+       "type": "20",
+       "iid": 3,
+       "value": "Sway Test",
+       "perms": [
+        "pr"
+       ],
+       "description": "Manufacturer",
+       "format": "string",
+       "maxLen": 64
+      },
+      {
+       "type": "21",
+       "iid": 4,
+       "value": "Modèle Lampe du salon",
+       "perms": [
+        "pr"
+       ],
+       "description": "Model",
+       "format": "string",
+       "maxLen": 64
+      },
+      {
+       "type": "23",
+       "iid": 5,
+       "value": "Lampe du salon",
+       "perms": [
+        "pr"
+       ],
+       "description": "Name",
+       "format": "string",
+       "maxLen": 64
+      },
+      {
+       "type": "30",
+       "iid": 6,
+       "value": "light-CC:22:3D:E3:CE:F8",
+       "perms": [
+        "pr"
+       ],
+       "description": "Serial Number",
+       "format": "string",
+       "maxLen": 64
+      },
+      {
+       "type": "52",
+       "iid": 7,
+       "value": "0.0.0",
+       "perms": [
+        "pr"
+       ],
+       "description": "Firmware Revision",
+       "format": "string"
+      }
+     ]
+    },
+    {
+     "type": "43",
+     "iid": 8,
+     "characteristics": [
+      {
+       "type": "23",
+       "iid": 9,
+       "value": "Lampe du salon",
+       "perms": [
+        "pr"
+       ],
+       "description": "Name",
+       "format": "string",
+       "maxLen": 64
+      },
+      {
+       "type": "25",
+       "iid": 10,
+       "value": 0,
+       "perms": [
+        "ev",
+        "pr",
+        "pw"
+       ],
+       "description": "On",
+       "format": "bool"
+      },
+      {
+       "type": "8",
+       "iid": 11,
+       "value": 40,
+       "perms": [
+        "ev",
+        "pr",
+        "pw"
+       ],
+       "description": "Brightness",
+       "format": "int",
+       "unit": "percentage",
+       "minValue": 0,
+       "maxValue": 100,
+       "minStep": 1
+      },
+      {
+       "type": "13",
+       "iid": 12,
+       "value": 0,
+       "perms": [
+        "ev",
+        "pr",
+        "pw"
+       ],
+       "description": "Hue",
+       "format": "float",
+       "unit": "arcdegrees",
+       "minValue": 0,
+       "maxValue": 360,
+       "minStep": 1
+      },
+      {
+       "type": "2F",
+       "iid": 13,
+       "value": 0,
+       "perms": [
+        "ev",
+        "pr",
+        "pw"
+       ],
+       "description": "Saturation",
+       "format": "float",
+       "unit": "percentage",
+       "minValue": 0,
+       "maxValue": 100,
+       "minStep": 1
+      },
+      {
+       "type": "CE",
+       "iid": 14,
+       "value": 250,
+       "perms": [
+        "ev",
+        "pr",
+        "pw"
+       ],
+       "description": "Color Temperature",
+       "format": "int",
+       "minValue": 140,
+       "maxValue": 500,
+       "minStep": 1
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "aid": 3,
+   "services": [
+    {
+     "type": "3E",
+     "iid": 1,
+     "characteristics": [
+      {
+       "type": "14",
+       "iid": 2,
+       "perms": [
+        "pw"
+       ],
+       "description": "Identify",
+       "format": "bool"
+      },
+      {
+       "type": "20",
+       "iid": 3,
+       "value": "Sway Test",
+       "perms": [
+        "pr"
+       ],
+       "description": "Manufacturer",
+       "format": "string",
+       "maxLen": 64
+      },
+      {
+       "type": "21",
+       "iid": 4,
+       "value": "Modèle Thermomètre du salon",
+       "perms": [
+        "pr"
+       ],
+       "description": "Model",
+       "format": "string",
+       "maxLen": 64
+      },
+      {
+       "type": "23",
+       "iid": 5,
+       "value": "Thermomètre du salon",
+       "perms": [
+        "pr"
+       ],
+       "description": "Name",
+       "format": "string",
+       "maxLen": 64
+      },
+      {
+       "type": "30",
+       "iid": 6,
+       "value": "sensor-CC:22:3D:E3:CE:F8",
+       "perms": [
+        "pr"
+       ],
+       "description": "Serial Number",
+       "format": "string",
+       "maxLen": 64
+      },
+      {
+       "type": "52",
+       "iid": 7,
+       "value": "0.0.0",
+       "perms": [
+        "pr"
+       ],
+       "description": "Firmware Revision",
+       "format": "string"
+      }
+     ]
+    },
+    {
+     "type": "8A",
+     "iid": 8,
+     "characteristics": [
+      {
+       "type": "23",
+       "iid": 9,
+       "value": "Thermomètre",
+       "perms": [
+        "pr"
+       ],
+       "description": "Name",
+       "format": "string",
+       "maxLen": 64
+      },
+      {
+       "type": "11",
+       "iid": 10,
+       "value": 21.5,
+       "perms": [
+        "ev",
+        "pr"
+       ],
+       "description": "Current Temperature",
+       "format": "float",
+       "unit": "celsius",
+       "minValue": -270,
+       "maxValue": 100,
+       "minStep": 0.1
+      }
+     ]
+    },
+    {
+     "type": "82",
+     "iid": 11,
+     "characteristics": [
+      {
+       "type": "23",
+       "iid": 12,
+       "value": "Humidité",
+       "perms": [
+        "pr"
+       ],
+       "description": "Name",
+       "format": "string",
+       "maxLen": 64
+      },
+      {
+       "type": "10",
+       "iid": 13,
+       "value": 48,
+       "perms": [
+        "ev",
+        "pr"
+       ],
+       "description": "Current Relative Humidity",
+       "format": "float",
+       "unit": "percentage",
+       "minValue": 0,
+       "maxValue": 100,
+       "minStep": 1
+      }
+     ]
+    },
+    {
+     "type": "96",
+     "iid": 14,
+     "characteristics": [
+      {
+       "type": "23",
+       "iid": 15,
+       "value": "Pile",
+       "perms": [
+        "pr"
+       ],
+       "description": "Name",
+       "format": "string",
+       "maxLen": 64
+      },
+      {
+       "type": "79",
+       "iid": 16,
+       "value": 0,
+       "perms": [
+        "ev",
+        "pr"
+       ],
+       "description": "Status Low Battery",
+       "format": "uint8",
+       "minValue": 0,
+       "maxValue": 1,
+       "minStep": 1,
+       "valid-values": [
+        0,
+        1
+       ]
+      },
+      {
+       "type": "68",
+       "iid": 17,
+       "value": 87,
+       "perms": [
+        "ev",
+        "pr"
+       ],
+       "description": "Battery Level",
+       "format": "uint8",
+       "unit": "percentage",
+       "minValue": 0,
+       "maxValue": 100,
+       "minStep": 1
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "aid": 4,
+   "services": [
+    {
+     "type": "3E",
+     "iid": 1,
+     "characteristics": [
+      {
+       "type": "14",
+       "iid": 2,
+       "perms": [
+        "pw"
+       ],
+       "description": "Identify",
+       "format": "bool"
+      },
+      {
+       "type": "20",
+       "iid": 3,
+       "value": "Sway Test",
+       "perms": [
+        "pr"
+       ],
+       "description": "Manufacturer",
+       "format": "string",
+       "maxLen": 64
+      },
+      {
+       "type": "21",
+       "iid": 4,
+       "value": "Modèle Porte d'entrée",
+       "perms": [
+        "pr"
+       ],
+       "description": "Model",
+       "format": "string",
+       "maxLen": 64
+      },
+      {
+       "type": "23",
+       "iid": 5,
+       "value": "Porte d'entrée",
+       "perms": [
+        "pr"
+       ],
+       "description": "Name",
+       "format": "string",
+       "maxLen": 64
+      },
+      {
+       "type": "30",
+       "iid": 6,
+       "value": "door-CC:22:3D:E3:CE:F8",
+       "perms": [
+        "pr"
+       ],
+       "description": "Serial Number",
+       "format": "string",
+       "maxLen": 64
+      },
+      {
+       "type": "52",
+       "iid": 7,
+       "value": "0.0.0",
+       "perms": [
+        "pr"
+       ],
+       "description": "Firmware Revision",
+       "format": "string"
+      }
+     ]
+    },
+    {
+     "type": "80",
+     "iid": 8,
+     "characteristics": [
+      {
+       "type": "23",
+       "iid": 9,
+       "value": "Porte d'entrée",
+       "perms": [
+        "pr"
+       ],
+       "description": "Name",
+       "format": "string",
+       "maxLen": 64
+      },
+      {
+       "type": "6A",
+       "iid": 10,
+       "value": 0,
+       "perms": [
+        "ev",
+        "pr"
+       ],
+       "description": "Contact Sensor State",
+       "format": "uint8",
+       "minValue": 0,
+       "maxValue": 1,
+       "minStep": 1,
+       "valid-values": [
+        0,
+        1
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "aid": 5,
+   "services": [
+    {
+     "type": "3E",
+     "iid": 1,
+     "characteristics": [
+      {
+       "type": "14",
+       "iid": 2,
+       "perms": [
+        "pw"
+       ],
+       "description": "Identify",
+       "format": "bool"
+      },
+      {
+       "type": "20",
+       "iid": 3,
+       "value": "Sway Test",
+       "perms": [
+        "pr"
+       ],
+       "description": "Manufacturer",
+       "format": "string",
+       "maxLen": 64
+      },
+      {
+       "type": "21",
+       "iid": 4,
+       "value": "Modèle Serrure",
+       "perms": [
+        "pr"
+       ],
+       "description": "Model",
+       "format": "string",
+       "maxLen": 64
+      },
+      {
+       "type": "23",
+       "iid": 5,
+       "value": "Serrure",
+       "perms": [
+        "pr"
+       ],
+       "description": "Name",
+       "format": "string",
+       "maxLen": 64
+      },
+      {
+       "type": "30",
+       "iid": 6,
+       "value": "lock-CC:22:3D:E3:CE:F8",
+       "perms": [
+        "pr"
+       ],
+       "description": "Serial Number",
+       "format": "string",
+       "maxLen": 64
+      },
+      {
+       "type": "52",
+       "iid": 7,
+       "value": "0.0.0",
+       "perms": [
+        "pr"
+       ],
+       "description": "Firmware Revision",
+       "format": "string"
+      }
+     ]
+    },
+    {
+     "type": "45",
+     "iid": 8,
+     "characteristics": [
+      {
+       "type": "23",
+       "iid": 9,
+       "value": "Serrure",
+       "perms": [
+        "pr"
+       ],
+       "description": "Name",
+       "format": "string",
+       "maxLen": 64
+      },
+      {
+       "type": "1D",
+       "iid": 10,
+       "value": 1,
+       "perms": [
+        "ev",
+        "pr"
+       ],
+       "description": "Lock Current State",
+       "format": "uint8",
+       "minValue": 0,
+       "maxValue": 3,
+       "minStep": 1,
+       "valid-values": [
+        0,
+        1,
+        2,
+        3
+       ]
+      },
+      {
+       "type": "1E",
+       "iid": 11,
+       "value": 1,
+       "perms": [
+        "ev",
+        "pr",
+        "pw"
+       ],
+       "description": "Lock Target State",
+       "format": "uint8",
+       "minValue": 0,
+       "maxValue": 1,
+       "minStep": 1,
+       "valid-values": [
+        0,
+        1
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "aid": 6,
+   "services": [
+    {
+     "type": "3E",
+     "iid": 1,
+     "characteristics": [
+      {
+       "type": "14",
+       "iid": 2,
+       "perms": [
+        "pw"
+       ],
+       "description": "Identify",
+       "format": "bool"
+      },
+      {
+       "type": "20",
+       "iid": 3,
+       "value": "Sway Test",
+       "perms": [
+        "pr"
+       ],
+       "description": "Manufacturer",
+       "format": "string",
+       "maxLen": 64
+      },
+      {
+       "type": "21",
+       "iid": 4,
+       "value": "Modèle Bouton",
+       "perms": [
+        "pr"
+       ],
+       "description": "Model",
+       "format": "string",
+       "maxLen": 64
+      },
+      {
+       "type": "23",
+       "iid": 5,
+       "value": "Bouton",
+       "perms": [
+        "pr"
+       ],
+       "description": "Name",
+       "format": "string",
+       "maxLen": 64
+      },
+      {
+       "type": "30",
+       "iid": 6,
+       "value": "button-CC:22:3D:E3:CE:F8",
+       "perms": [
+        "pr"
+       ],
+       "description": "Serial Number",
+       "format": "string",
+       "maxLen": 64
+      },
+      {
+       "type": "52",
+       "iid": 7,
+       "value": "0.0.0",
+       "perms": [
+        "pr"
+       ],
+       "description": "Firmware Revision",
+       "format": "string"
+      }
+     ]
+    },
+    {
+     "type": "89",
+     "iid": 8,
+     "characteristics": [
+      {
+       "type": "23",
+       "iid": 9,
+       "value": "Bouton",
+       "perms": [
+        "pr"
+       ],
+       "description": "Name",
+       "format": "string",
+       "maxLen": 64
+      },
+      {
+       "type": "73",
+       "iid": 10,
+       "value": null,
+       "perms": [
+        "ev",
+        "pr"
+       ],
+       "description": "Programmable Switch Event",
+       "format": "uint8",
+       "minValue": 0,
+       "maxValue": 2,
+       "minStep": 1,
+       "valid-values": [
+        0,
+        1,
+        2
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "aid": 7,
+   "services": [
+    {
+     "type": "3E",
+     "iid": 1,
+     "characteristics": [
+      {
+       "type": "14",
+       "iid": 2,
+       "perms": [
+        "pw"
+       ],
+       "description": "Identify",
+       "format": "bool"
+      },
+      {
+       "type": "20",
+       "iid": 3,
+       "value": "Sway Test",
+       "perms": [
+        "pr"
+       ],
+       "description": "Manufacturer",
+       "format": "string",
+       "maxLen": 64
+      },
+      {
+       "type": "21",
+       "iid": 4,
+       "value": "Modèle Store",
+       "perms": [
+        "pr"
+       ],
+       "description": "Model",
+       "format": "string",
+       "maxLen": 64
+      },
+      {
+       "type": "23",
+       "iid": 5,
+       "value": "Store",
+       "perms": [
+        "pr"
+       ],
+       "description": "Name",
+       "format": "string",
+       "maxLen": 64
+      },
+      {
+       "type": "30",
+       "iid": 6,
+       "value": "shade-CC:22:3D:E3:CE:F8",
+       "perms": [
+        "pr"
+       ],
+       "description": "Serial Number",
+       "format": "string",
+       "maxLen": 64
+      },
+      {
+       "type": "52",
+       "iid": 7,
+       "value": "0.0.0",
+       "perms": [
+        "pr"
+       ],
+       "description": "Firmware Revision",
+       "format": "string"
+      }
+     ]
+    },
+    {
+     "type": "8C",
+     "iid": 8,
+     "characteristics": [
+      {
+       "type": "23",
+       "iid": 9,
+       "value": "Store",
+       "perms": [
+        "pr"
+       ],
+       "description": "Name",
+       "format": "string",
+       "maxLen": 64
+      },
+      {
+       "type": "6D",
+       "iid": 10,
+       "value": 100,
+       "perms": [
+        "ev",
+        "pr"
+       ],
+       "description": "Current Position",
+       "format": "uint8",
+       "unit": "percentage",
+       "minValue": 0,
+       "maxValue": 100,
+       "minStep": 1
+      },
+      {
+       "type": "72",
+       "iid": 11,
+       "value": 2,
+       "perms": [
+        "ev",
+        "pr"
+       ],
+       "description": "Position State",
+       "format": "uint8",
+       "minValue": 0,
+       "maxValue": 2,
+       "minStep": 1,
+       "valid-values": [
+        0,
+        1,
+        2
+       ]
+      },
+      {
+       "type": "7C",
+       "iid": 12,
+       "value": 100,
+       "perms": [
+        "ev",
+        "pr",
+        "pw"
+       ],
+       "description": "Target Position",
+       "format": "uint8",
+       "unit": "percentage",
+       "minValue": 0,
+       "maxValue": 100,
+       "minStep": 1
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

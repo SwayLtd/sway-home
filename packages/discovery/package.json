@@ -1,0 +1,20 @@
+{
+  "name": "@sway-home/discovery",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Zero-dependency local network discovery: ARP, TCP sweep, mDNS, SSDP, NetBIOS, OUI, HTTP fingerprinting.",
+  "exports": {
+    ".": "./src/index.ts",
+    "./mdns": "./src/mdns.ts",
+    "./ssdp": "./src/ssdp.ts",
+    "./oui": "./src/oui.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@sway-home/shared": "workspace:*"
+  }
+}

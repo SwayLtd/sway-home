@@ -1,0 +1,29 @@
+{
+  "name": "@sway-home/shared",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./capabilities": "./src/capabilities.ts",
+    "./device": "./src/device.ts",
+    "./events": "./src/events.ts",
+    "./automation": "./src/automation.ts",
+    "./protocol": "./src/protocol.ts",
+    "./agent": "./src/agent.ts",
+    "./units": "./src/units.ts",
+    "./live_turns": "./src/live_turns.ts",
+    "./widget": "./src/widget.ts",
+    "./rich_text": "./src/rich_text.ts",
+    "./format": "./src/format.ts",
+    "./icons": "./src/icons.ts",
+    "./areas": "./src/areas.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "zod": "^4"
+  }
+}

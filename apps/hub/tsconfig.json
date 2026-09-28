@@ -1,0 +1,36 @@
+{
+  "extends": "@adonisjs/tsconfig/tsconfig.app.json",
+  "compilerOptions": {
+    "outDir": "./build",
+    "types": [
+      "@adonisjs/core/types",
+      "bun-types"
+    ],
+    "baseUrl": ".",
+    "paths": {
+      "@sway-home/shared": [
+        "../../packages/shared/src/index.ts"
+      ],
+      "@sway-home/shared/*": [
+        "../../packages/shared/src/*"
+      ],
+      "@sway-home/discovery": [
+        "../../packages/discovery/src/index.ts"
+      ],
+      "@sway-home/discovery/*": [
+        "../../packages/discovery/src/*"
+      ]
+    },
+    "rootDir": "../../",
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
+    "verbatimModuleSyntax": false
+  },
+  "include": [
+    "**/*.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "build"
+  ]
+}

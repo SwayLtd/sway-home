@@ -1,0 +1,24 @@
+[install]
+# Workspace hoisting keeps a single node_modules at the root.
+linker = "hoisted"
+
+[install.lockfile]
+save = true
+
+[test]
+coverage = false
+
+# Vendored test suites and the Nuxt build output both contain files bun would otherwise pick
+# up and try to run. Ignoring the directories outright is cheaper than filtering afterwards,
+# because bun prunes them during the scan instead of reading them.
+pathIgnorePatterns = [
+  "**/node_modules/**",
+  "apps/web/**",
+  "**/.nuxt/**",
+  "**/dist/**",
+  "**/build/**",
+]
+
+# Every suite opens its own in-memory database and closes it again, so a leaked handle from
+# one file cannot make the next one pass for the wrong reason.
+preload = ["./tests/setup.ts"]

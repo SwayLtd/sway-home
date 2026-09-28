@@ -1,0 +1,32 @@
+{
+  "name": "sway-smart-home",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Sway Smart Home - AI-first, privacy-first smart home OS. Local SQLite, conversational agent, web console.",
+  "workspaces": ["apps/*", "packages/*"],
+  "scripts": {
+    "dev": "bun run --filter '*' dev",
+    "dev:hub": "bun run --cwd apps/hub dev",
+    "dev:web": "bun run --cwd apps/web dev",
+    "build": "bun run --filter '*' build",
+    "typecheck": "bun run --filter '*' typecheck",
+    "lint": "bun run --filter '*' lint",
+    "test": "bun test packages/*/tests apps/hub/tests",
+    "db:migrate": "bun run --cwd apps/hub db:migrate",
+    "db:seed": "bun run --cwd apps/hub db:seed",
+    "db:reset": "bun run --cwd apps/hub db:reset",
+    "scan": "bun run --cwd apps/hub scan",
+    "house:sim": "bun run --cwd apps/hub house:sim",
+    "doctor": "bun run scripts/doctor.ts"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.4.2",
+    "typescript": "5.9.3"
+  },
+  "engines": {
+    "bun": ">=1.2.0",
+    "node": ">=22.0.0"
+  },
+  "packageManager": "bun@1.2.17"
+}

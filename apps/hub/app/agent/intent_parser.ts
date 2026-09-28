@@ -31,7 +31,7 @@ import {
   wantsSeries,
   type Measure,
 } from '#agent/language'
-import { chip, formatQuantity, type AgentToolResult, type WidgetData } from '@sway-home/shared'
+import { chip, formatQuantity, type AgentPendingCommand, type AgentToolResult, type DeviceCategory, type WidgetData } from '@sway-home/shared'
 
 export interface ParsedIntent {
   tool: string
@@ -39,7 +39,26 @@ export interface ParsedIntent {
   confidence: number
   /** Lets an intent phrase its own answer rather than echoing the tool summary. */
   reply?: (result: AgentToolResult) => string
+  /** Set when the intent is a question: the command its answer will run. */
+  resume?: AgentPendingCommand
 }
+
+/**
+ * The kinds of device a sentence can name without saying which one. On and off only: the
+ * words that open or close a shutter are another command.
+ */
+const DEVICE_KINDS: { pattern: RegExp; category: DeviceCategory; question: string; all: string }[] = [
+  {
+    pattern: /\b(lampes?|lumieres?|lights?|lamps?|plafonniers?|spots?|appliques?|ampoules?|lampadaires?|guirlandes?)\b/,
+    category: 'light',
+    question: 'Quelle lampe ?',
+    all: 'Toutes les lampes',
+  },
+  { pattern: /\b(prises?|plugs?|outlets?)\b/, category: 'outlet', question: 'Quelle prise ?', all: 'Toutes les prises' },
+]
+
+/** At most seven devices in the question, plus "all of them": a list longer than that is a search. */
+const MAX_CANDIDATES = 7
 
 const COLOURS: Record<string, [number, number]> = {
   rouge: [0, 100], red: [0, 100],
@@ -141,6 +160,34 @@ function speakWidget(result: AgentToolResult, measure: Measure, period: string |
   if (data.kind === 'metric') return `${widget.title} : ${value(data.value, data.unit)}`
   if (data.kind === 'empty') return data.message
   return result.summary
+}
+
+/**
+ * The command a question was waiting for, with the answer filled in. "*" is the "all of
+ * them" option. An answer that names no device runs nothing.
+ */
+export function resumeIntent(pending: AgentPendingCommand, answer: string): ParsedIntent | null {
+  const command = typeof pending.args.command === 'string' ? pending.args.command : ''
+  const done = command === 'turnOn' ? 'allumé' : command === 'turnOff' ? 'éteint' : 'fait'
+
+  if (answer === '*') {
+    if (!pending.all) return null
+    return {
+      tool: pending.all.tool,
+      args: pending.all.args,
+      confidence: 1,
+      reply: (result) => (result.ok ? `C'est ${done}.` : result.summary),
+    }
+  }
+
+  const device = deviceRepository.find(answer)
+  if (!device) return null
+  return {
+    tool: pending.tool,
+    args: { ...pending.args, [pending.field]: device.id },
+    confidence: 1,
+    reply: (result) => (result.ok ? `${device.name} : ${done}.` : result.summary),
+  }
 }
 
 export function parseIntent(input: string): ParsedIntent | null {
@@ -366,8 +413,12 @@ export function parseIntent(input: string): ParsedIntent | null {
   // Commands
   // -------------------------------------------------------------------------------------
 
-  const wantsOn = /(allume|allumer|mets? en marche|active|turn on|switch on|ouvre la lumiere|light up)/.test(text)
-  const wantsOff = /(eteins?|eteindre|coupe|arrete|desactive|turn off|switch off|shut (off|down))/.test(text)
+  // "Le plafonnier est allumé ?" asks about a state. Once accents are gone it contains
+  // "allume", and it used to switch the light on. "Peux-tu allumer la lampe ?" is still a
+  // command: the question mark is not the tell, the participle after "est" is.
+  const stateQuestion = /\b(est|sont|etait|etaient|reste|restent)\s+(bien\s+|encore\s+|toujours\s+)?(allumee?s?|eteinte?s?)\b/.test(text)
+  const wantsOn = !stateQuestion && /(allume|allumer|mets? en marche|active|turn on|switch on|ouvre la lumiere|light up)/.test(text)
+  const wantsOff = !stateQuestion && /(eteins?|eteindre|coupe|arrete|desactive|turn off|switch off|shut (off|down))/.test(text)
   const everything = /(tout|toutes?|everything|all (the )?(lights?|lamps?)?)\b/.test(text)
 
   if (wantsOff && everything && !area && !device) {
@@ -395,6 +446,52 @@ export function parseIntent(input: string): ParsedIntent | null {
       args: { area, capability: 'onoff', ...(category ? { category } : {}), command: wantsOn ? 'turnOn' : 'turnOff' },
       confidence: 0.9,
       reply: (result) => (result.ok ? `${area} : ${wantsOn ? 'allumé' : 'éteint'}.` : result.summary),
+    }
+  }
+
+  // A kind of device named without saying which one: "allume la lampe". With one lamp in
+  // the house there is nothing to ask; with several, guessing is how the bedroom lights up
+  // at midnight, so the question goes back with every candidate and "all of them".
+  if ((wantsOn || wantsOff) && !everything) {
+    const kind = DEVICE_KINDS.find((candidate) => candidate.pattern.test(text))
+    if (kind) {
+      const command = wantsOn ? 'turnOn' : 'turnOff'
+      const done = wantsOn ? 'allumé' : 'éteint'
+      const candidates = deviceRepository
+        .all({ category: kind.category, limit: 200 })
+        .filter((candidate) => candidate.capabilities.includes('onoff') && !candidate.hidden)
+        .sort((a, b) => a.name.localeCompare(b.name, 'fr'))
+
+      const only = candidates.length === 1 ? candidates[0] : undefined
+      if (only) {
+        return {
+          tool: 'control_device',
+          args: { device: only.id, command, args: { transitionMs: 500 } },
+          confidence: 0.9,
+          reply: (result) => (result.ok ? `${only.name} : ${done}.` : result.summary),
+        }
+      }
+
+      if (candidates.length > 1) {
+        const areas = places.areas()
+        const options = candidates.slice(0, MAX_CANDIDATES).map((candidate) => {
+          const areaName = candidate.areaId ? areas.find((area) => area.id === candidate.areaId)?.name : undefined
+          return { id: candidate.id, label: candidate.name.slice(0, 80), ...(areaName ? { hint: areaName } : {}) }
+        })
+        return {
+          tool: 'ask_user',
+          args: { questions: [{ id: 'device', title: kind.question, options: [...options, { id: '*', label: kind.all }] }] },
+          confidence: 0.9,
+          reply: () => kind.question,
+          resume: {
+            tool: 'control_device',
+            args: { command, args: { transitionMs: 500 } },
+            field: 'device',
+            questionId: 'device',
+            all: { tool: 'control_many', args: { category: kind.category, capability: 'onoff', command } },
+          },
+        }
+      }
     }
   }
 

@@ -123,6 +123,240 @@ const confidenceLabel: Record<string, string> = {
   low: 'Faible',
   guess: 'Simple supposition',
 }
+
+// ---------------------------------------------------------------------------------------
+// Réglage fin: scrub-able settings built from the device's own capabilities and live state.
+// Only a field a capability actually declares is shown; the arg names below (kelvin, celsius,
+// speed, mode...) come straight from packages/shared/src/capabilities.ts, not from the state
+// field they adjust.
+// ---------------------------------------------------------------------------------------
+
+const HVAC_MODE_OPTIONS: FineTuneOption[] = [
+  { value: 'off', label: 'Arrêt' },
+  { value: 'heat', label: 'Chauffage' },
+  { value: 'cool', label: 'Froid' },
+  { value: 'auto', label: 'Auto' },
+]
+
+const FAN_MODE_OPTIONS: FineTuneOption[] = [
+  { value: 'off', label: 'Arrêt' },
+  { value: 'low', label: 'Faible' },
+  { value: 'medium', label: 'Moyenne' },
+  { value: 'high', label: 'Élevée' },
+  { value: 'auto', label: 'Auto' },
+  { value: 'quiet', label: 'Silencieuse' },
+  { value: 'boost', label: 'Boost' },
+]
+
+function numericRange(value: unknown, fallback: [number, number]): [number, number] {
+  return Array.isArray(value) && value.length === 2 ? [Number(value[0]), Number(value[1])] : fallback
+}
+
+const fineTuneFields = computed<FineTuneField[]>(() => {
+  if (!device.value) return []
+  const caps = new Set(device.value.capabilities)
+  const state = device.value.state
+  const fields: FineTuneField[] = []
+
+  if (caps.has('brightness')) {
+    fields.push({ key: 'brightness', kind: 'number', label: 'Luminosité', value: Number(state.brightness ?? 0), min: 0, max: 100, step: 1, unit: '%' })
+  }
+  if (caps.has('colorTemperature')) {
+    const range = numericRange(state.colorTemperatureRange, [2000, 6500])
+    fields.push({
+      key: 'colorTemperature', kind: 'number', label: 'Température',
+      value: Number(state.colorTemperature ?? 2700), min: range[0], max: range[1], step: 50, unit: 'K',
+    })
+  }
+  if (caps.has('thermostat')) {
+    const range = numericRange(state.targetTemperatureRange, [5, 35])
+    fields.push({
+      key: 'targetTemperature', kind: 'number', label: 'Consigne',
+      value: Number(state.targetTemperature ?? 20), min: range[0], max: range[1], step: 0.5, unit: '°C',
+    })
+    fields.push({ key: 'hvacMode', kind: 'select', label: 'Mode', value: String(state.hvacMode ?? 'off'), display: 'segment', options: HVAC_MODE_OPTIONS })
+  }
+  if (caps.has('position')) {
+    fields.push({ key: 'position', kind: 'number', label: 'Position', value: Number(state.position ?? 0), min: 0, max: 100, step: 1, unit: '%' })
+  }
+  if (caps.has('volume')) {
+    fields.push({ key: 'volume', kind: 'number', label: 'Volume', value: Number(state.volume ?? 0), min: 0, max: 100, step: 1, unit: '%' })
+  }
+  if (caps.has('fan')) {
+    fields.push({ key: 'fanMode', kind: 'select', label: 'Ventilation', value: String(state.fanMode ?? 'auto'), display: 'menu', options: FAN_MODE_OPTIONS })
+  }
+  return fields
+})
+
+const fineTuneValues = ref<FineTuneValues>({})
+let fineTuneEditingUntil = 0
+
+// Hard reset on every device change - this page component is reused across /devices/:id
+// navigations, so a stale value from the previous device must not leak into the next one.
+// Otherwise stay live-synced to the SSE-updated state, except for ~250ms after a local edit
+// (the same window as the commit debounce below), so a drag in progress is not overwritten
+// mid-gesture by the very state update its own optimistic command produced.
+watch(
+  deviceId,
+  () => {
+    fineTuneEditingUntil = 0
+    fineTuneValues.value = fineTuneBaseline(fineTuneFields.value)
+  },
+  { immediate: true }
+)
+watch(
+  () => device.value?.state,
+  () => {
+    if (!device.value || Date.now() < fineTuneEditingUntil) return
+    fineTuneValues.value = fineTuneBaseline(fineTuneFields.value)
+  },
+  { deep: true }
+)
+
+const fineTuneTimers: Record<string, ReturnType<typeof setTimeout>> = {}
+
+function commitFineTune(key: string, value: number | string) {
+  if (!device.value) return
+  const id = device.value.id
+  switch (key) {
+    case 'brightness': void send(id, 'setBrightness', { brightness: value, transitionMs: 400 }); break
+    case 'colorTemperature': void send(id, 'setColorTemperature', { kelvin: value, transitionMs: 400 }); break
+    case 'targetTemperature': void send(id, 'setTargetTemperature', { celsius: value }); break
+    case 'position': void send(id, 'setPosition', { position: value }); break
+    case 'volume': void send(id, 'setVolume', { volume: value }); break
+    case 'hvacMode': void send(id, 'setHvacMode', { mode: value }); break
+    case 'fanMode': void send(id, 'setFanMode', { mode: value }); break
+  }
+}
+
+// AiFineTuneCard emits `change` continuously while dragging (and on every keystroke of the
+// typed input); sending a command per frame would flood the hub, so only the value still
+// current 250ms after the last frame is actually sent.
+function onFineTuneChange(key: string, value: number | string) {
+  fineTuneEditingUntil = Date.now() + 260
+  clearTimeout(fineTuneTimers[key])
+  fineTuneTimers[key] = setTimeout(() => commitFineTune(key, value), 250)
+}
+
+// ---------------------------------------------------------------------------------------
+// Camera: a live snapshot loop for AiAgentScreen, and "Apprendre une tâche" through useTeach.
+// ---------------------------------------------------------------------------------------
+
+const hasCamera = computed(() => device.value?.capabilities.includes('camera') === true)
+
+const cameraSrc = ref<string | undefined>(undefined)
+const cameraLoaded = ref(false)
+const cameraLive = ref(false)
+const cameraError = ref<string | null>(null)
+let cameraObjectUrl: string | null = null
+let cameraTimer: ReturnType<typeof setInterval> | null = null
+
+async function refreshSnapshot() {
+  if (!device.value || document.hidden) return
+  const url = `/api/cameras/${encodeURIComponent(device.value.adapterId)}/${encodeURIComponent(device.value.nativeId)}/snapshot?t=${Date.now()}`
+  try {
+    const response = await fetch(url)
+    if (!response.ok) {
+      let message = "La caméra n'a pas répondu."
+      try {
+        const body = (await response.json()) as { error?: string }
+        if (body.error) message = body.error
+      } catch {
+        // The hub always answers JSON on error; an unparsable body just keeps the generic message.
+      }
+      cameraError.value = message
+      cameraLive.value = false
+      return
+    }
+    const blob = await response.blob()
+    const nextUrl = URL.createObjectURL(blob)
+    // Preload before swapping `src`, so a failing camera never flashes a broken image over
+    // the last good picture - only a picture that actually decoded replaces the current one.
+    const preload = new Image()
+    preload.onload = () => {
+      const previous = cameraObjectUrl
+      cameraObjectUrl = nextUrl
+      cameraSrc.value = nextUrl
+      cameraLoaded.value = true
+      cameraLive.value = true
+      cameraError.value = null
+      if (previous) URL.revokeObjectURL(previous)
+    }
+    preload.onerror = () => {
+      URL.revokeObjectURL(nextUrl)
+      cameraError.value = 'Image de la caméra illisible.'
+      cameraLive.value = false
+    }
+    preload.src = nextUrl
+  } catch (error) {
+    cameraError.value = error instanceof Error ? error.message : "La caméra n'a pas répondu."
+    cameraLive.value = false
+  }
+}
+
+function stopCameraLoop() {
+  if (cameraTimer) {
+    clearInterval(cameraTimer)
+    cameraTimer = null
+  }
+}
+function startCameraLoop() {
+  stopCameraLoop()
+  void refreshSnapshot()
+  cameraTimer = setInterval(() => void refreshSnapshot(), 2000)
+}
+function onVisibilityChange() {
+  if (document.hidden) stopCameraLoop()
+  else if (hasCamera.value) startCameraLoop()
+}
+
+const { status: teachStatus, error: teachError, start: startTeach, stop: stopTeach, load: loadTeach } = useTeach()
+const teaching = computed(() => teachStatus.value.active)
+const teachStartedAt = computed(() => (teachStatus.value.startedAt ? Date.parse(teachStatus.value.startedAt) : undefined))
+const teachResult = ref<{ text: string } | null>(null)
+
+// Reset and restart on every device change too, for the same reason as the fine-tune values -
+// including the "what was learned" note, which belongs to whichever device was recording it.
+watch(
+  [deviceId, hasCamera],
+  ([, has]) => {
+    cameraLoaded.value = false
+    cameraLive.value = false
+    cameraError.value = null
+    cameraSrc.value = undefined
+    teachResult.value = null
+    if (cameraObjectUrl) {
+      URL.revokeObjectURL(cameraObjectUrl)
+      cameraObjectUrl = null
+    }
+    if (has) startCameraLoop()
+    else stopCameraLoop()
+  },
+  { immediate: true }
+)
+
+async function onCameraRecord() {
+  teachResult.value = null
+  await startTeach(device.value ? `Depuis ${device.value.name}` : undefined)
+}
+async function onCameraStop() {
+  const result = await stopTeach()
+  if (!result) return // useTeach already put the failure in teachError
+  teachResult.value = result.routine
+    ? { text: `Sway a appris ${result.steps.length} étape${result.steps.length > 1 ? 's' : ''} et propose la routine « ${result.routine.name} ».` }
+    : { text: "Aucune étape n'a été enregistrée : rien à proposer." }
+}
+
+onMounted(() => {
+  document.addEventListener('visibilitychange', onVisibilityChange)
+  void loadTeach()
+})
+onBeforeUnmount(() => {
+  document.removeEventListener('visibilitychange', onVisibilityChange)
+  stopCameraLoop()
+  Object.values(fineTuneTimers).forEach(clearTimeout)
+  if (cameraObjectUrl) URL.revokeObjectURL(cameraObjectUrl)
+})
 </script>
 
 <template>
@@ -186,6 +420,33 @@ const confidenceLabel: Record<string, string> = {
             >{{ COMMAND_LABEL[command] ?? command }}</button>
           </div>
         </div>
+      </section>
+
+      <!-- Camera -->
+      <section v-if="hasCamera" class="mb-5 rounded-2xl border border-base-300 bg-base-100 p-4">
+        <h2 class="mb-3 text-xs font-semibold uppercase tracking-wider text-base-content/40">Caméra</h2>
+        <AiAgentScreen
+          :src="cameraSrc"
+          :title="device.name"
+          :live="cameraLive"
+          :recording="teaching"
+          :started-at="teachStartedAt"
+          :variant="cameraLoaded ? 'default' : 'Loading'"
+          @record="onCameraRecord"
+          @stop="onCameraStop"
+        />
+        <p v-if="cameraError" class="mt-2 text-[12px] text-error">{{ cameraError }}</p>
+        <p v-if="teachError" class="mt-2 text-[12px] text-error">{{ teachError }}</p>
+        <p v-if="teachResult" class="mt-2 text-[12px] text-base-content/70">
+          {{ teachResult.text }}
+          <NuxtLink to="/routines" class="font-medium text-primary underline-offset-2 hover:underline">Voir la routine proposée</NuxtLink>
+        </p>
+      </section>
+
+      <!-- Réglage fin -->
+      <section v-if="fineTuneFields.length" class="mb-5 rounded-2xl border border-base-300 bg-base-100 p-4">
+        <h2 class="mb-3 text-xs font-semibold uppercase tracking-wider text-base-content/40">Réglage fin</h2>
+        <AiFineTuneCard :fields="fineTuneFields" v-model="fineTuneValues" :labels="{ title: device.name }" @change="onFineTuneChange" />
       </section>
 
       <!-- History -->

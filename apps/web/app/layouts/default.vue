@@ -11,10 +11,90 @@
  *    `getBoundingClientRect()` menu working.
  */
 
-const { railPinned, railPeeking, railVisible, dockTool, dockOpen, dockWidth, breadcrumb, commandPaletteOpen, toggleDock, shellStyle } = useShell()
+const {
+  railPinned,
+  railPeeking,
+  railCollapsed,
+  railVisible,
+  dockTool,
+  dockOpen,
+  dockWidth,
+  breadcrumb,
+  commandPaletteOpen,
+  toggleDock,
+  shellStyle,
+} = useShell()
 const { house, connected, refresh, failed } = useHouse()
+const { running: runningTasks } = useTasks()
 const route = useRoute()
+const router = useRouter()
 const items: NavItem[] = navigationItems()
+
+// ---------------------------------------------------------------------------------------
+// Rail: AiSidebarNav fed by the real navigation, the house, and the conversation history.
+// ---------------------------------------------------------------------------------------
+
+interface ConversationSummary {
+  id: string
+  title: string
+  pinned: boolean
+  archived: boolean
+  updatedAt: string
+  messageCount: number
+}
+
+const MODE_LABEL: Record<string, string> = {
+  home: 'Maison',
+  away: 'Absent',
+  night: 'Nuit',
+  guest: 'Invités',
+  vacation: 'Vacances',
+  party: 'Soirée',
+  focus: 'Focus',
+  cinema: 'Cinéma',
+  cleaning: 'Ménage',
+}
+
+const workspace = computed<SidebarNavWorkspace>(() => ({
+  id: 'house',
+  name: 'Sway Home',
+  subtitle: house.value ? `${house.value.counts.total} appareils · ${MODE_LABEL[house.value.mode] ?? house.value.mode}` : undefined,
+}))
+
+const sidebarSections: SidebarNavSection[] = (['house', 'intelligence', 'system'] as const).map((key) => ({ key, label: SECTION_LABEL[key] }))
+const sidebarItems = computed<SidebarNavItem[]>(() =>
+  items.map((item) => ({ id: item.to, label: item.label, icon: item.icon, to: item.to, badge: item.badge?.() ?? undefined, section: item.section }))
+)
+const activeItemId = computed(() => items.find((item) => isRowActive(item, route.path, items))?.to ?? null)
+
+const conversationId = useState<string | null>('agent-conversation', () => null)
+const agentMessages = useState<unknown[]>('agent-messages', () => [])
+
+const history = ref<ConversationSummary[]>([])
+async function loadHistory() {
+  history.value = (await hubFetch<{ conversations: ConversationSummary[] }>('/agent/conversations')).conversations
+}
+// Refreshed every time the rail comes into view, pinned or peeking - never while hidden.
+watch(railVisible, (open) => { if (open) void loadHistory() }, { immediate: true })
+
+const sidebarHistory = computed<SidebarNavHistoryEntry[]>(() => history.value.map((entry) => ({ id: entry.id, title: entry.title, at: formatRelative(entry.updatedAt) })))
+
+function onSidebarNavigate(item: SidebarNavEmittedItem) {
+  if (item.to) void router.push(item.to)
+}
+
+async function onNewChat() {
+  conversationId.value = (await hubFetch<{ id: string }>('/agent/conversations', { method: 'POST' })).id
+  agentMessages.value = []
+  await router.push('/')
+  void loadHistory()
+}
+
+async function onOpenChat(id: string) {
+  conversationId.value = id
+  agentMessages.value = (await hubFetch<{ messages: unknown[] }>(`/agent/conversations/${id}`)).messages
+  await router.push('/')
+}
 
 /**
  * A page can ask for the whole rectangle. The assistant does: it is a conversation that
@@ -47,23 +127,28 @@ useHubStream()
 
 await useAsyncData('house-initial', () => refresh(), { server: false })
 
-const sections = computed(() => {
-  const groups: { key: NavItem['section']; label: string; items: NavItem[] }[] = []
-  for (const section of ['house', 'intelligence', 'system'] as const) {
-    groups.push({ key: section, label: SECTION_LABEL[section], items: items.filter((item) => item.section === section) })
-  }
-  return groups
-})
-
 const alertCount = computed(() => house.value?.openAlerts.length ?? 0)
 const proposalCount = computed(() => house.value?.pendingProposals ?? 0)
+
+/** The house's alert banner, as AiSidebarNav's footer prop: it owns its own layout and click. */
+const railFooter = computed<SidebarNavAction | null>(() =>
+  alertCount.value > 0 ? { id: 'alerts', label: `${alertCount.value} alerte${alertCount.value > 1 ? 's' : ''}`, icon: 'ph:warning', to: '/timeline?filter=alerts' } : null
+)
 
 const QUICK_TOOLS = [
   { id: 'agent' as const, icon: 'ph:chat-circle-dots', label: 'Assistant' },
   { id: 'timeline' as const, icon: 'ph:pulse', label: 'Activité' },
   { id: 'scan' as const, icon: 'ph:broadcast', label: 'Scan réseau' },
   { id: 'proposals' as const, icon: 'ph:seal-question', label: 'Propositions' },
+  { id: 'tasks' as const, icon: 'ph:list-checks', label: 'Tâches' },
 ]
+
+/** The small count pill on a quick-tool button: proposals waiting for a yes, tasks running now. */
+function quickToolBadge(id: (typeof QUICK_TOOLS)[number]['id']): number | null {
+  if (id === 'proposals') return proposalCount.value > 0 ? proposalCount.value : null
+  if (id === 'tasks') return runningTasks.value.length > 0 ? runningTasks.value.length : null
+  return null
+}
 
 // Dragging the dock edge. Kept here rather than in the dock so the pointer capture lives
 // on the element that owns the width.
@@ -217,9 +302,9 @@ function defineShortcuts(map: Record<string, { meta?: boolean; handler: () => vo
       >
         <Icon :name="tool.icon" class="size-5" />
         <span
-          v-if="tool.id === 'proposals' && proposalCount > 0"
+          v-if="quickToolBadge(tool.id)"
           class="absolute -right-0.5 -top-0.5 grid size-4 place-items-center rounded-full bg-primary text-[10px] font-semibold text-primary-content tabular"
-        >{{ proposalCount }}</span>
+        >{{ quickToolBadge(tool.id) }}</span>
       </button>
 
       <ShellThemeToggle />
@@ -239,7 +324,7 @@ function defineShortcuts(map: Record<string, { meta?: boolean; handler: () => vo
 
     <!-- Rail: a floating panel while peeking, a column of its own once pinned -->
     <aside
-      class="fixed bottom-2 left-2 top-16 z-30 hidden flex-col overflow-y-auto overflow-x-hidden rounded-2xl border border-base-300 bg-base-100 pb-4 transition-[transform,box-shadow] duration-200 lg:flex thin-scroll"
+      class="fixed bottom-2 left-2 top-16 z-30 hidden flex-col overflow-y-auto overflow-x-hidden rounded-2xl border border-base-300 bg-base-100 pb-4 transition-[transform,box-shadow,width] duration-200 lg:flex thin-scroll"
       :class="[
         railVisible ? 'translate-x-0' : '-translate-x-[calc(100%+1rem)]',
         railPinned ? 'shadow-sm' : 'shadow-xl',
@@ -248,35 +333,20 @@ function defineShortcuts(map: Record<string, { meta?: boolean; handler: () => vo
       @pointerenter="peek(true)"
       @pointerleave="peek(false)"
     >
-      <div v-for="section in sections" :key="section.key" class="px-2 pt-3">
-        <p class="px-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-base-content/40">{{ section.label }}</p>
-
-        <NuxtLink
-          v-for="item in section.items"
-          :key="item.to"
-          :to="item.to"
-          class="group relative flex h-9 items-center gap-2.5 rounded-lg px-2 text-[13px] transition-colors"
-          :class="isRowActive(item, route.path, items) ? 'bg-primary/25 font-medium' : 'text-base-content/70 hover:bg-base-200 hover:text-base-content'"
-        >
-          <Icon :name="item.icon" class="size-[18px] shrink-0" />
-          <span class="truncate">{{ item.label }}</span>
-          <span
-            v-if="item.badge?.()"
-            class="ml-auto rounded-full bg-base-300 px-1.5 text-[11px] tabular text-base-content/60"
-          >{{ item.badge() }}</span>
-        </NuxtLink>
-      </div>
-
-      <div class="flex-1" />
-
-      <NuxtLink
-        v-if="alertCount > 0"
-        to="/timeline?filter=alerts"
-        class="mx-2 mt-3 flex items-center gap-2 rounded-lg border border-error/30 bg-error/10 px-2 py-2 text-[12px] text-error"
-      >
-        <Icon name="ph:warning" class="size-4 shrink-0" />
-        <span class="truncate">{{ alertCount }} alerte{{ alertCount > 1 ? 's' : '' }}</span>
-      </NuxtLink>
+      <AiSidebarNav
+        v-model:collapsed="railCollapsed"
+        fill
+        :workspace="workspace"
+        :items="sidebarItems"
+        :sections="sidebarSections"
+        :active="activeItemId"
+        :history="sidebarHistory"
+        :active-history-id="conversationId"
+        :footer="railFooter"
+        @navigate="onSidebarNavigate"
+        @new-chat="onNewChat"
+        @open-chat="onOpenChat"
+      />
     </aside>
 
     <main
@@ -327,7 +397,7 @@ function defineShortcuts(map: Record<string, { meta?: boolean; handler: () => vo
     <!-- Mobile navigation: a different layout, not a narrower one -->
     <nav class="fixed inset-x-0 bottom-0 z-40 flex h-16 items-center justify-around border-t border-base-300 bg-base-100 px-2 lg:hidden">
       <NuxtLink
-        v-for="item in [items[0], items[1], items[5], items[6], items[12]].filter(Boolean)"
+        v-for="item in [items[0], items[1], items[5], items[6], items[13]].filter(Boolean)"
         :key="item!.to"
         :to="item!.to"
         class="flex h-12 flex-1 flex-col items-center justify-center gap-0.5 rounded-xl text-[10px]"

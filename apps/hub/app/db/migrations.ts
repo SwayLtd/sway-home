@@ -443,6 +443,46 @@ export const MIGRATIONS: Migration[] = [
       CREATE UNIQUE INDEX idx_announce_dedupe ON agent_announcements(dedupe_key) WHERE dedupe_key IS NOT NULL;
     `,
   },
+
+  {
+    // What an answer keeps besides its sentence: the trace of the run, the sources it was
+    // read from, the memories in mind, the questions it asked back, and the handles to undo
+    // or approve what it did. One JSON column, because the interface reads it whole.
+    //
+    // Undo entries learn which run pushed them, so an answer can offer "Annuler" for exactly
+    // its own commands and nothing older.
+    id: '0007_agent_trace',
+    up: `
+      ALTER TABLE agent_messages ADD COLUMN meta TEXT;
+      ALTER TABLE undo_entries ADD COLUMN correlation_id TEXT;
+      CREATE INDEX idx_undo_correlation ON undo_entries(correlation_id);
+    `,
+  },
+
+  {
+    // A suggested routine is weighed (how sure the hub is) and comes with alternatives
+    // (every day rather than weekdays, sunrise rather than 7:00), shown before approving.
+    id: '0008_routine_suggestions',
+    up: `
+      ALTER TABLE routines ADD COLUMN confidence REAL;
+      ALTER TABLE routines ADD COLUMN alternatives TEXT NOT NULL DEFAULT '[]';
+    `,
+  },
+
+  {
+    // The values of the computed columns of the device table ("Batterie à changer ?", or a
+    // column described in a sentence), kept so the table does not recompute on every visit.
+    id: '0009_device_properties',
+    up: `
+      CREATE TABLE device_property_values (
+        property_id  TEXT NOT NULL,
+        device_id    TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+        value        TEXT,
+        computed_at  TEXT NOT NULL,
+        PRIMARY KEY (property_id, device_id)
+      );
+    `,
+  },
 ]
 
 export const MIGRATIONS_TABLE = `

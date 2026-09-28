@@ -8,6 +8,8 @@
  * privacy-first product has to be explicit about in the exact place the reader types it.
  */
 
+import { LOADER_VARIANTS, PROMPT_SHAPES, TASK_LAYOUTS } from '~/composables/useAiPreferences'
+
 interface AgentSettings {
   autonomy: string
   voice: { enabled: boolean; wakeWord: string; wakeWordEnabled: boolean; sttProvider: string; ttsProvider: string; ttsVoice: string; language: string; speakReplies: boolean }
@@ -30,6 +32,11 @@ interface Provider {
 }
 
 const voice = useVoiceSettings()
+
+/** Which variant of the agent kit the console uses where it has several. Kept in this browser. */
+const { preferences: aiPreferences, set: setAiPreference } = useAiPreferences()
+/** The loader previews share one start, so their timers read the same. */
+const previewStartedAt = Date.now()
 
 const agent = ref<AgentSettings | null>(null)
 const energy = ref({ pricePerKwh: 0.2516, currency: 'EUR', contractKva: 9 })
@@ -422,6 +429,75 @@ const monthlyEstimate = computed(() => {
             </tbody>
           </table>
         </details>
+      </section>
+
+      <!-- The agent interface: which variant the console uses where the kit has several -->
+      <section id="interface" class="rounded-2xl border border-base-300 bg-base-100 p-4">
+        <div class="mb-1 flex items-center gap-2">
+          <h2 class="text-xs font-semibold uppercase tracking-wider text-base-content/40">Interface de l'assistant</h2>
+          <div class="flex-1" />
+          <NuxtLink to="/composants" class="flex items-center gap-1 text-[12px] text-base-content/55 transition-colors hover:text-base-content">
+            Voir tous les composants
+            <Icon name="ph:arrow-right" class="size-3.5" />
+          </NuxtLink>
+        </div>
+        <p class="mb-3 text-[12px] text-base-content/55">
+          Réglage du navigateur. Toutes les variantes restent visibles dans la page Composants.
+        </p>
+
+        <p class="mb-1.5 text-[12px] text-base-content/60">Chargement</p>
+        <div class="grid items-start gap-2 sm:grid-cols-2">
+          <button
+            v-for="option in LOADER_VARIANTS"
+            :key="option.value"
+            type="button"
+            class="flex flex-col gap-2 rounded-xl border p-3 text-left transition-colors"
+            :class="aiPreferences.loader === option.value ? 'border-primary bg-primary/10' : 'border-base-300 hover:bg-base-200'"
+            :aria-pressed="aiPreferences.loader === option.value"
+            @click="setAiPreference('loader', option.value)"
+          >
+            <span class="pointer-events-none flex min-h-10 items-center">
+              <AiLoadingState :variant="option.value" :label="option.label" :started-at="previewStartedAt" />
+            </span>
+            <span class="text-[11px] text-base-content/50">{{ option.hint }}</span>
+          </button>
+        </div>
+
+        <div class="mt-4 space-y-2">
+          <div class="flex flex-wrap items-center gap-3">
+            <span class="w-28 shrink-0 text-[12px] text-base-content/60">Zone de saisie</span>
+            <div class="join">
+              <button
+                v-for="option in PROMPT_SHAPES"
+                :key="option.value"
+                class="btn btn-xs join-item"
+                :class="aiPreferences.prompt === option.value ? 'admin-cta' : 'btn-outline'"
+                :title="option.hint"
+                @click="setAiPreference('prompt', option.value)"
+              >
+                {{ option.label }}
+              </button>
+            </div>
+            <span class="text-[11px] text-base-content/45">{{ PROMPT_SHAPES.find((option) => option.value === aiPreferences.prompt)?.hint }}</span>
+          </div>
+
+          <div class="flex flex-wrap items-center gap-3">
+            <span class="w-28 shrink-0 text-[12px] text-base-content/60">Tâches</span>
+            <div class="join">
+              <button
+                v-for="option in TASK_LAYOUTS"
+                :key="option.value"
+                class="btn btn-xs join-item"
+                :class="aiPreferences.tasks === option.value ? 'admin-cta' : 'btn-outline'"
+                :title="option.hint"
+                @click="setAiPreference('tasks', option.value)"
+              >
+                {{ option.label }}
+              </button>
+            </div>
+            <span class="text-[11px] text-base-content/45">{{ TASK_LAYOUTS.find((option) => option.value === aiPreferences.tasks)?.hint }}</span>
+          </div>
+        </div>
       </section>
 
       <!-- Privacy -->

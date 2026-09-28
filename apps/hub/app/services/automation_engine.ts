@@ -18,7 +18,75 @@ import type { Action, Condition, HouseEvent, Routine, Trigger } from '@sway-home
 import { bus } from '#services/event_bus'
 import { houseService } from '#services/house'
 import { deviceRepository } from '#repositories/device_repository'
-import { house, people, places, routines, settings } from '#repositories/store'
+import { house, people, places, routines, scenes, settings } from '#repositories/store'
+import { tasks } from '#services/task_service'
+
+const VERB: Record<string, string> = {
+  turnOn: 'allumer',
+  turnOff: 'éteindre',
+  toggle: 'basculer',
+  open: 'ouvrir',
+  close: 'fermer',
+  lock: 'verrouiller',
+  unlock: 'déverrouiller',
+  play: 'lancer la lecture',
+  pause: 'mettre en pause',
+}
+
+const MODE_WORD: Record<string, string> = {
+  home: 'Maison',
+  away: 'Absent',
+  night: 'Nuit',
+  guest: 'Invités',
+  vacation: 'Vacances',
+  party: 'Soirée',
+  focus: 'Focus',
+  cinema: 'Cinéma',
+  cleaning: 'Ménage',
+}
+
+function commandWords(command: string, args: Record<string, unknown>): string {
+  if (command === 'setBrightness' && typeof args.brightness === 'number') return `luminosité ${args.brightness} %`
+  if (command === 'setTargetTemperature' && typeof args.temperature === 'number') return `consigne ${String(args.temperature).replace('.', ',')} °C`
+  if (command === 'setPosition' && typeof args.position === 'number') return `position ${args.position} %`
+  return VERB[command] ?? command
+}
+
+/** An action in words, for the step list of the running routine. */
+export function describeAction(action: Action): string {
+  switch (action.kind) {
+    case 'device_command': {
+      const words = commandWords(action.command, action.args ?? {})
+      if (action.deviceId) {
+        const device = deviceRepository.find(action.deviceId)
+        return device ? `${device.name} : ${words}` : `Appareil introuvable : ${words}`
+      }
+      return `Plusieurs appareils : ${words}`
+    }
+    case 'scene':
+      return `Scène ${scenes.all().find((scene) => scene.id === action.sceneId)?.name ?? 'introuvable'}`
+    case 'delay':
+      return action.seconds >= 60 && action.seconds % 60 === 0 ? `Attendre ${action.seconds / 60} min` : `Attendre ${action.seconds} s`
+    case 'notify':
+      return 'Envoyer une notification'
+    case 'speak':
+      return 'Annoncer à voix haute'
+    case 'set_house_mode':
+      return `Mode ${MODE_WORD[action.mode] ?? action.mode}`
+    case 'run_routine':
+      return `Routine ${routines.find(action.routineId)?.name ?? 'introuvable'}`
+    case 'webhook':
+      return 'Appeler un webhook'
+    case 'ask_agent':
+      return "Demander à l'assistant"
+    case 'wait_until':
+      return 'Attendre une condition'
+    case 'stop':
+      return 'Arrêter'
+    default:
+      return 'Action'
+  }
+}
 
 interface RunContext {
   routine: Routine
@@ -55,6 +123,13 @@ class AutomationEngine {
     this.#pendingTimers.clear()
     for (const controller of this.#running.values()) controller.abort()
     this.#running.clear()
+  }
+
+  constructor() {
+    // "Réessayer" on a failed routine task runs the routine again, by hand.
+    tasks.registerRunner('routine', async (payload) => {
+      if (typeof payload.routineId === 'string') await this.trigger(payload.routineId, 'user')
+    })
   }
 
   /** Run a routine by hand, from the UI or from the agent. */
@@ -249,6 +324,16 @@ class AutomationEngine {
     const controller = new AbortController()
     this.#running.set(routine.id, controller)
 
+    // The run as a task: one step per action, so the console can show where it is.
+    const task = tasks.start({
+      kind: 'routine',
+      title: routine.name,
+      subtitle: context.trigger?.kind === 'manual' ? 'Lancée à la main' : 'Déclenchée',
+      steps: routine.actions.map((action) => describeAction(action)),
+      retry: { routineId: routine.id },
+      onCancel: () => controller.abort(),
+    })
+
     bus.publish('automation.triggered', {
       subjectType: 'automation',
       subjectId: routine.id,
@@ -259,15 +344,29 @@ class AutomationEngine {
 
     let failure: string | null = null
 
+    let failed = 0
     try {
-      for (const action of routine.actions) {
+      for (const [index, action] of routine.actions.entries()) {
         if (controller.signal.aborted) break
+        task.step(index, 'running')
         const ok = await this.#runAction(action, context, controller.signal)
         context.steps.push({ action: action.kind, ok })
+        task.step(index, ok ? 'done' : 'failed')
+        task.progress((index + 1) / routine.actions.length)
+        if (!ok) failed += 1
+        bus.publish('automation.action_run', {
+          subjectType: 'automation',
+          subjectId: routine.id,
+          correlationId: context.correlationId,
+          payload: { name: routine.name, index, action: action.kind, ok },
+        })
         if (action.kind === 'stop') break
       }
+      if (failed > 0) task.fail(`${failed} action${failed > 1 ? 's' : ''} en échec`)
+      else task.done()
     } catch (error) {
       failure = (error as Error).message
+      task.fail(failure)
       bus.publish('automation.failed', {
         subjectType: 'automation',
         subjectId: routine.id,

@@ -17,7 +17,7 @@ import { scanService } from '#services/scan_service'
 import { automationEngine } from '#services/automation_engine'
 import { insightEngine } from '#services/insight_engine'
 import { allDescriptors, DECLARED } from '#adapters/registry'
-import { agentService } from '#agent/agent_service'
+import { agentService, parseAnswers } from '#agent/agent_service'
 import { liveVoice } from '#services/live_voice'
 import { publicAdapterConfig, publicSettings, saveAgentSettings, secrets, type ProviderSecret } from '#services/secrets'
 
@@ -28,12 +28,21 @@ import { widgetService } from '#services/widget_service'
 import { narrator } from '#services/narrator'
 import { autonomyEngine } from '#services/autonomy_engine'
 import { followUpsFor } from '#agent/follow_ups'
+import { describeProposal } from '#agent/proposal_changes'
+import { tasks } from '#services/task_service'
+import { insights } from '#services/insights'
+import { teach } from '#services/teach_service'
+import { deviceProperties, type PropertyKind } from '#services/device_properties'
+import { parseRoutineInput } from '#services/routine_input'
+import { liveModelChoices } from '#agent/model_choice'
+import { parseMentions, slashCommands } from '#agent/composer'
+import { REWRITE_ACTIONS, type RewriteAction } from '#agent/rewrite'
 import { cameraSnapshot } from '#services/camera_snapshot'
 import { deviceRepository } from '#repositories/device_repository'
 import { alerts, adapterConfig, conversations, house, hosts, memories, messages, people, places, proposals, routines, scenes, settings, undo } from '#repositories/store'
 import { database } from '#db/database'
 
-const api = router.group(() => {
+router.group(() => {
   // -------------------------------------------------------------------------------------
   // Health and meta
   // -------------------------------------------------------------------------------------
@@ -146,6 +155,77 @@ const api = router.group(() => {
     devices: deviceRepository.search(String(request.input('q', '')), Number(request.input('limit', 20))),
   }))
 
+  // -------------------------------------------------------------------------------------
+  // Computed columns of the device table
+  // -------------------------------------------------------------------------------------
+
+  router.get('/devices/properties', async () => ({ properties: deviceProperties.list(), values: deviceProperties.values() }))
+
+  router.post('/devices/properties', async ({ request, response }: HttpContext) => {
+    try {
+      const options = request.input('options')
+      const model = request.input('model')
+      return {
+        property: deviceProperties.define({
+          label: String(request.input('label', '')),
+          prompt: String(request.input('prompt', '')),
+          kind: request.input('kind'),
+          options: Array.isArray(options) ? options.filter((option): option is string => typeof option === 'string') : undefined,
+          model: typeof model === 'string' && model ? model : undefined,
+        }),
+      }
+    } catch (error) {
+      return response.badRequest({ error: (error as Error).message })
+    }
+  })
+
+  /** A partial edit: an absent field stays, `model: null` goes back to the settings' model. */
+  router.patch('/devices/properties/:id', async ({ params, request, response }: HttpContext) => {
+    const body = request.body() as Record<string, unknown>
+    const text = (key: string) => (typeof body[key] === 'string' ? (body[key] as string) : undefined)
+    try {
+      const property = deviceProperties.update(params.id, {
+        label: text('label'),
+        prompt: text('prompt'),
+        kind: text('kind') as PropertyKind | undefined,
+        options: Array.isArray(body.options) ? body.options.filter((option): option is string => typeof option === 'string') : undefined,
+        model: body.model === null ? null : text('model'),
+      })
+      if (!property) return response.notFound({ error: 'Colonne introuvable' })
+      return { property }
+    } catch (error) {
+      return response.badRequest({ error: (error as Error).message })
+    }
+  })
+
+  router.delete('/devices/properties/:id', async ({ params, response }: HttpContext) => {
+    if (!deviceProperties.remove(params.id)) return response.notFound({ error: 'Colonne introuvable' })
+    return { ok: true }
+  })
+
+  /** Fills a column; each value is pushed as its device resolves, then `{ kind: 'done' }`. */
+  router.post('/devices/properties/:id/run', async ({ params, response }: HttpContext) => {
+    const raw = response.response
+    raw.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache, no-transform', connection: 'keep-alive' })
+    const controller = new AbortController()
+    raw.on('close', () => {
+      if (!raw.writableEnded) controller.abort()
+    })
+    const write = (payload: unknown) => {
+      if (!controller.signal.aborted) raw.write(`data: ${JSON.stringify(payload)}\n\n`)
+    }
+    try {
+      await deviceProperties.run(params.id, { signal: controller.signal, onValue: (deviceId, value) => write({ kind: 'value', deviceId, value }) })
+      write({ kind: 'done' })
+    } catch (error) {
+      write({ kind: 'error', message: (error as Error).message })
+    }
+    if (!raw.writableEnded) raw.end()
+    return raw
+  })
+
+  // The fixed paths under /devices/ come before /devices/:id: routes are tried in the
+  // order they are registered, and :id would answer "properties" as a device id.
   router.get('/devices/:id', async ({ params, response }: HttpContext) => {
     const device = deviceRepository.find(params.id)
     if (!device) return response.notFound({ error: 'Device not found' })
@@ -321,8 +401,57 @@ const api = router.group(() => {
   router.post('/adapters/:id/pair', async ({ params, request, response }: HttpContext) => {
     const entry = adapters.get(params.id)
     if (!entry?.adapter.pair) return response.badRequest({ error: 'This adapter has no pairing flow' })
-    const result = await entry.adapter.pair(request.body() as Record<string, unknown>)
-    return result
+    // A pairing blocks until the accessory answers: it shows as a task meanwhile. No retry
+    // payload is kept - the body can hold a setup code, and retrying means typing it again.
+    const task = tasks.start({ kind: 'pairing', title: `Appairage ${entry.adapter.descriptor.name}`, steps: ['Connexion et échange des clés'] })
+    task.step(0, 'running')
+    try {
+      const result = await entry.adapter.pair(request.body() as Record<string, unknown>)
+      if (result.ok) task.done(result.message ?? null)
+      else task.fail(result.message ?? 'Appairage refusé')
+      return result
+    } catch (error) {
+      task.fail((error as Error).message)
+      throw error
+    }
+  })
+
+  // -------------------------------------------------------------------------------------
+  // Tasks: what the hub is busy with
+  // -------------------------------------------------------------------------------------
+
+  router.get('/tasks', async () => ({ tasks: tasks.list() }))
+
+  // -------------------------------------------------------------------------------------
+  // Teaching a task by doing it
+  // -------------------------------------------------------------------------------------
+
+  router.get('/teach', async () => teach.status())
+
+  router.post('/teach/start', async ({ request }: HttpContext) => {
+    const title = request.input('title')
+    return teach.start({ title: typeof title === 'string' ? title : null })
+  })
+
+  /** Ends the recording; what was taught comes back as a suggested routine. */
+  router.post('/teach/stop', async () => teach.stop())
+
+  router.post('/teach/cancel', async () => {
+    teach.cancel()
+    return { ok: true }
+  })
+
+  /** The insight cards: energy today against yesterday, something unusual, the week by room. */
+  router.get('/insights', async () => ({ insights: insights.all() }))
+
+  router.post('/tasks/:id/cancel', async ({ params, response }: HttpContext) => {
+    if (!tasks.cancel(params.id)) return response.badRequest({ error: 'Cette tâche ne peut pas être annulée' })
+    return { ok: true }
+  })
+
+  router.post('/tasks/:id/retry', async ({ params, response }: HttpContext) => {
+    if (!(await tasks.retry(params.id))) return response.badRequest({ error: 'Cette tâche ne peut pas être relancée' })
+    return { ok: true }
   })
 
   // -------------------------------------------------------------------------------------
@@ -333,25 +462,19 @@ const api = router.group(() => {
     routines: routines.all(request.input('status')),
   }))
 
-  router.post('/routines', async ({ request }: HttpContext) => ({
-    routine: routines.create({
-      name: String(request.input('name', 'Nouvelle routine')),
-      description: request.input('description', null),
-      enabled: request.input('enabled', true) !== false,
-      mode: request.input('mode', 'single'),
-      triggers: request.input('triggers', []),
-      conditions: request.input('conditions', []),
-      actions: request.input('actions', []),
-      authoredBy: 'user',
-      status: request.input('status', 'active'),
-      suggestionReason: null,
-      areaId: request.input('areaId', null),
-    }),
-  }))
+  /** A routine is checked against the shared schema before it is kept; errors come back in words. */
+  router.post('/routines', async ({ request, response }: HttpContext) => {
+    const parsed = parseRoutineInput(request.body())
+    if (!parsed.ok) return response.badRequest({ error: parsed.errors.join(' | '), errors: parsed.errors })
+    return { routine: routines.create({ ...parsed.value, authoredBy: 'user', suggestionReason: null }) }
+  })
 
-  router.patch('/routines/:id', async ({ params, request }: HttpContext) => ({
-    routine: routines.update(params.id, request.body() as Record<string, unknown>),
-  }))
+  router.patch('/routines/:id', async ({ params, request, response }: HttpContext) => {
+    if (!routines.find(params.id)) return response.notFound({ error: 'Routine introuvable' })
+    const parsed = parseRoutineInput(request.body(), { partial: true })
+    if (!parsed.ok) return response.badRequest({ error: parsed.errors.join(' | '), errors: parsed.errors })
+    return { routine: routines.update(params.id, parsed.value) }
+  })
 
   router.delete('/routines/:id', async ({ params }: HttpContext) => {
     routines.remove(params.id)
@@ -362,9 +485,13 @@ const api = router.group(() => {
 
   router.get('/routines/:id/runs', async ({ params }: HttpContext) => ({ runs: routines.runs(params.id) }))
 
-  router.post('/routines/:id/approve', async ({ params }: HttpContext) => ({
-    routine: routines.update(params.id, { status: 'active', enabled: true }),
-  }))
+  /** Approve a suggestion as proposed, or with one of its alternatives (`alternativeId`). */
+  router.post('/routines/:id/approve', async ({ params, request, response }: HttpContext) => {
+    const alternativeId = request.input('alternativeId')
+    const routine = insightEngine.approveSuggestion(params.id, typeof alternativeId === 'string' ? alternativeId : undefined)
+    if (!routine) return response.badRequest({ error: 'Routine ou alternative introuvable' })
+    return { routine }
+  })
 
   router.post('/routines/suggest', async () => ({ created: insightEngine.suggestFromHabits() }))
 
@@ -522,26 +649,53 @@ const api = router.group(() => {
   }))
 
   router.post('/agent/ask', async ({ request }: HttpContext) =>
-    agentService.ask(String(request.input('message', '')), { conversationId: request.input('conversationId') })
+    agentService.ask(String(request.input('message', '')), {
+      conversationId: request.input('conversationId'),
+      answers: parseAnswers(request.input('answers')),
+      model: typeof request.input('model') === 'string' ? String(request.input('model')).slice(0, 160) : undefined,
+      mentions: parseMentions(request.input('mentions')),
+    })
   )
 
-  /** Streaming variant: the same run, with each step pushed as it happens. */
+  /** The model picker: every model, whether it can run now, and why not when it cannot. */
+  router.get('/agent/models', async () => ({ models: liveModelChoices(await probeLocalRunners()) }))
+
+  /** The `/` menu: fixed shortcuts, then the scenes, the active routines and the modes. */
+  router.get('/agent/commands', async () => ({ commands: slashCommands() }))
+
+  /**
+   * Streaming variant: the same run, with each step pushed as it happens. When the page goes
+   * away the run is aborted: it stops between steps, runs no tool on behalf of someone who
+   * left, and saves what it did as an interrupted answer.
+   */
   router.post('/agent/ask/stream', async ({ request, response }: HttpContext) => {
-    response.response.writeHead(200, {
+    const raw = response.response
+    raw.writeHead(200, {
       'content-type': 'text/event-stream',
       'cache-control': 'no-cache, no-transform',
       connection: 'keep-alive',
     })
-    const write = (payload: unknown) => response.response.write(`data: ${JSON.stringify(payload)}\n\n`)
+
+    const controller = new AbortController()
+    raw.on('close', () => {
+      if (!raw.writableEnded) controller.abort()
+    })
+    const write = (payload: unknown) => {
+      if (!controller.signal.aborted) raw.write(`data: ${JSON.stringify(payload)}\n\n`)
+    }
 
     const result = await agentService.ask(String(request.input('message', '')), {
       conversationId: request.input('conversationId'),
+      answers: parseAnswers(request.input('answers')),
+      model: typeof request.input('model') === 'string' ? String(request.input('model')).slice(0, 160) : undefined,
+      mentions: parseMentions(request.input('mentions')),
+      signal: controller.signal,
       onStep: (step) => write(step),
     })
 
     write({ kind: 'done', result })
-    response.response.end()
-    return response.response
+    if (!raw.writableEnded) raw.end()
+    return raw
   })
 
   /**
@@ -557,7 +711,45 @@ const api = router.group(() => {
     return { sessionId: result.sessionId, sdp: result.sdp }
   })
 
-  router.get('/agent/conversations', async () => ({ conversations: conversations.all(50) }))
+  router.get('/agent/conversations', async ({ request }: HttpContext) => ({
+    conversations: conversations.all(50, {
+      archived: request.input('archived') === '1' || request.input('archived') === 'true',
+      q: typeof request.input('q') === 'string' ? String(request.input('q')).slice(0, 80) : undefined,
+    }),
+  }))
+
+  /** Rename, pin, archive: `{ title?, pinned?, archived? }`. */
+  router.patch('/agent/conversations/:id', async ({ params, request, response }: HttpContext) => {
+    const title = request.input('title')
+    const pinned = request.input('pinned')
+    const archived = request.input('archived')
+    const ok = conversations.update(params.id, {
+      title: typeof title === 'string' ? title : undefined,
+      pinned: typeof pinned === 'boolean' ? pinned : undefined,
+      archived: typeof archived === 'boolean' ? archived : undefined,
+    })
+    if (!ok) return response.notFound({ error: 'Conversation introuvable' })
+    return { ok: true }
+  })
+
+  /** Work on a selected passage: `{ text, action: explain|shorten|rephrase|translate|custom, prompt? }`. */
+  router.post('/agent/rewrite', async ({ request, response }: HttpContext) => {
+    const text = request.input('text')
+    const action = request.input('action')
+    const prompt = request.input('prompt')
+    if (typeof text !== 'string' || text.trim().length === 0) return response.badRequest({ error: 'text manquant' })
+    if (!(REWRITE_ACTIONS as readonly string[]).includes(action)) return response.badRequest({ error: 'action inconnue' })
+    return agentService.rewrite(text, action as RewriteAction, { prompt: typeof prompt === 'string' ? prompt : undefined })
+  })
+
+  /** Thumbs up or down on an answer: `{ value: 'up' | 'down' | null }`. */
+  router.post('/agent/messages/:id/feedback', async ({ params, request, response }: HttpContext) => {
+    const value = request.input('value')
+    if (value !== 'up' && value !== 'down' && value !== null) return response.badRequest({ error: 'value: up, down ou null' })
+    const message = agentService.feedback(params.id, value)
+    if (!message) return response.notFound({ error: 'Réponse introuvable' })
+    return { feedback: message.feedback ?? null }
+  })
 
   router.get('/agent/conversations/:id', async ({ params }: HttpContext) => ({
     messages: messages.forConversation(params.id, 200),
@@ -592,9 +784,24 @@ const api = router.group(() => {
     return { ...autonomyEngine.status(), reflexes: autonomyEngine.reflexSettings() }
   })
 
-  router.get('/agent/proposals', async () => ({ proposals: proposals.pending() }))
+  /** Each proposal with its rows in words: what every device does now and will do after. */
+  router.get('/agent/proposals', async () => ({
+    proposals: proposals.pending().map((proposal) => ({ ...proposal, changes: describeProposal(proposal) })),
+  }))
 
-  router.post('/agent/proposals/:id/approve', async ({ params }: HttpContext) => agentService.approveProposal(params.id))
+  router.get('/agent/proposals/:id', async ({ params, response }: HttpContext) => {
+    const proposal = proposals.find(params.id)
+    if (!proposal) return response.notFound({ error: 'Proposition introuvable' })
+    return { proposal: { ...proposal, changes: describeProposal(proposal) } }
+  })
+
+  /** `include`: the indexes of the rows kept in the review. Absent, every row runs. */
+  router.post('/agent/proposals/:id/approve', async ({ params, request }: HttpContext) => {
+    const include = request.input('include')
+    return agentService.approveProposal(params.id, {
+      include: Array.isArray(include) ? include.filter((index): index is number => Number.isInteger(index)) : undefined,
+    })
+  })
 
   router.post('/agent/proposals/:id/reject', async ({ params }: HttpContext) => ({ ok: agentService.rejectProposal(params.id) }))
 
@@ -729,14 +936,8 @@ const api = router.group(() => {
   })
 }).prefix('/api')
 
-api.use(async ({ response }: HttpContext, next: () => Promise<void>) => {
-  // The console runs on another port in development; the hub is a LAN service, not a
-  // public one, so the permissive header is scoped to the API and nothing else.
-  response.header('access-control-allow-origin', '*')
-  response.header('access-control-allow-headers', 'content-type')
-  response.header('access-control-allow-methods', 'GET,POST,PATCH,PUT,DELETE,OPTIONS')
-  await next()
-})
+// No blanket CORS header on the API: the console reaches it through its own origin (the Nuxt
+// proxy), and the origin guard with config/cors.ts decides for everything else.
 
 router.get('/', async () => ({
   name: 'Sway Home hub',

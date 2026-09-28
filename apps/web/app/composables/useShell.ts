@@ -17,13 +17,15 @@ export interface Crumb {
   icon?: string
 }
 
-export type QuickTool = 'agent' | 'timeline' | 'scan' | 'proposals' | 'help' | null
+export type QuickTool = 'agent' | 'timeline' | 'scan' | 'proposals' | 'tasks' | 'help' | null
 
 export function useShell() {
   /** Pinned: the rail keeps a column of its own and the body shifts over. Off by default. */
   const railPinned = useState('shell-rail-pinned', () => false)
   /** Peeking: the pointer is in the left hot zone, so the rail floats over the page. */
   const railPeeking = useState('shell-rail-peeking', () => false)
+  /** Icons-only rail, AiSidebarNav's own collapse. Independent of pinned/peeking. */
+  const railCollapsed = useState('shell-rail-collapsed', () => false)
   const dockTool = useState<QuickTool>('shell-dock', () => null)
   const dockWidth = useState('shell-dock-width', () => 384)
   const breadcrumb = useState<Crumb[]>('shell-breadcrumb', () => [])
@@ -46,13 +48,14 @@ export function useShell() {
   /**
    * The geometry the layout is built from. Only a *pinned* rail takes width: while peeking
    * it floats above the page, because a page that reflows every time the pointer brushes the
-   * left edge is unusable.
+   * left edge is unusable. AiSidebarNav's own expanded/collapsed widths (224px / 52px) drive
+   * both the panel and the push amount, so the wrapper `<aside>` never fights the component
+   * it now contains.
    */
   const shellStyle = computed(() => ({
-    // The rail is a 13rem card with a 0.5rem margin on each side, so a pinned rail pushes
-    // the page by 14rem. Floating (peeking), it pushes nothing.
-    '--admin-rail-w': railPinned.value ? '14rem' : '0rem',
-    '--admin-rail-panel-w': '13rem',
+    // Panel width + the 1rem (0.5rem each side) margin the aside sits in.
+    '--admin-rail-w': railPinned.value ? (railCollapsed.value ? '4.25rem' : '15rem') : '0rem',
+    '--admin-rail-panel-w': railCollapsed.value ? '3.25rem' : '14rem',
     // The dock's card is 1rem narrower than the lane it reserves, for the same margins.
     '--admin-dock-w': dockOpen.value ? `${dockWidth.value + 16}px` : '0px',
   }))
@@ -60,6 +63,7 @@ export function useShell() {
   return {
     railPinned,
     railPeeking,
+    railCollapsed,
     railVisible,
     dockTool,
     dockOpen,
@@ -104,6 +108,7 @@ export function navigationItems(): NavItem[] {
     { label: 'Réseau', to: '/network', icon: 'ph:wifi-high', section: 'system' },
     { label: 'Intégrations', to: '/integrations', icon: 'ph:puzzle-piece', section: 'system' },
     { label: 'Diagnostics', to: '/diagnostics', icon: 'ph:heartbeat', section: 'system' },
+    { label: 'Composants', to: '/composants', icon: 'ph:shapes', section: 'system' },
     { label: 'Réglages', to: '/settings', icon: 'ph:sliders-horizontal', section: 'system' },
   ]
 }

@@ -6,6 +6,12 @@
  * and a sentence for the assistant. Anything typed that matches nothing is not an error -
  * it is a question, and Enter sends it to the agent. That removes the dead end a search box
  * usually has.
+ *
+ * The list itself is AiSearch: it already groups, highlights and moves a keyboard-active
+ * row, arrow keys included. `rows` below stays the one place that decides *what* can be
+ * found and in what order - AiSearch is told `:filter="false"` and only renders it, since
+ * its own accent-insensitive label match is narrower than the device search (name, area,
+ * model) this palette already does.
  */
 
 const { commandPaletteOpen, toggleDock } = useShell()
@@ -14,8 +20,9 @@ const { send } = useCommands()
 const router = useRouter()
 
 const query = ref('')
-const index = ref(0)
-const field = ref<HTMLInputElement | null>(null)
+// A structural type rather than `InstanceType<typeof AiSearch>`: AiSearch is a global,
+// auto-imported component, not a value this script otherwise imports.
+const search = ref<{ focus: () => void } | null>(null)
 
 const items: NavItem[] = navigationItems()
 
@@ -26,6 +33,13 @@ interface Row {
   hint?: string
   icon: string
   run: () => void | Promise<void>
+}
+
+const GROUP_LABEL: Record<Row['kind'], string | undefined> = {
+  device: 'Appareils',
+  page: 'Pages',
+  action: 'Actions',
+  ask: undefined,
 }
 
 function normalise(value: string): string {
@@ -90,28 +104,23 @@ function askAgent(text: string) {
   pending.value = text
 }
 
-watch(commandPaletteOpen, async (open) => {
-  if (!open) return
-  query.value = ''
-  index.value = 0
-  await nextTick()
-  field.value?.focus()
-})
+const searchItems = computed<SearchItem[]>(() =>
+  rows.value.map((row) => ({ id: `${row.kind}:${row.id}`, label: row.label, hint: row.hint, icon: row.icon, group: GROUP_LABEL[row.kind] }))
+)
 
-watch(query, () => (index.value = 0))
-
-function move(delta: number) {
-  const count = rows.value.length
-  if (count === 0) return
-  index.value = (index.value + delta + count) % count
-}
-
-async function run() {
-  const row = rows.value[index.value]
+async function onSelect(item: SearchItem) {
+  const row = rows.value.find((entry) => `${entry.kind}:${entry.id}` === item.id)
   if (!row) return
   commandPaletteOpen.value = false
   await row.run()
 }
+
+watch(commandPaletteOpen, async (open) => {
+  if (!open) return
+  query.value = ''
+  await nextTick()
+  search.value?.focus()
+})
 </script>
 
 <template>
@@ -127,47 +136,17 @@ async function run() {
         class="fixed inset-0 z-[100] bg-base-content/20 p-4 backdrop-blur-sm"
         @click.self="commandPaletteOpen = false"
       >
-        <div
-          class="mx-auto mt-[12vh] w-full max-w-xl overflow-hidden rounded-2xl border border-base-300 bg-base-100 shadow-2xl"
-          role="dialog"
-          aria-label="Recherche et commandes"
-        >
-          <div class="flex items-center gap-2 border-b border-base-200 px-3">
-            <Icon name="ph:magnifying-glass" class="size-4 shrink-0 text-base-content/40" />
-            <input
-              ref="field"
-              v-model="query"
-              type="text"
-              placeholder="Un appareil, une page, ou une question"
-              class="h-12 flex-1 bg-transparent text-[14px] outline-none placeholder:text-base-content/35"
-              @keydown.down.prevent="move(1)"
-              @keydown.up.prevent="move(-1)"
-              @keydown.enter.prevent="run"
-              @keydown.esc="commandPaletteOpen = false"
-            >
-            <kbd class="rounded border border-base-300 px-1 font-mono text-[10px] text-base-content/40">esc</kbd>
-          </div>
-
-          <ul class="max-h-80 overflow-y-auto p-1.5 thin-scroll">
-            <li v-for="(row, position) in rows" :key="row.kind + row.id">
-              <button
-                class="flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-left transition-colors"
-                :class="position === index ? 'bg-primary/25' : 'hover:bg-base-200'"
-                @mouseenter="index = position"
-                @click="run"
-              >
-                <Icon :name="row.icon" class="size-4 shrink-0 text-base-content/55" />
-                <span class="min-w-0 flex-1">
-                  <span class="block truncate text-[13px]">{{ row.label }}</span>
-                  <span v-if="row.hint" class="block truncate text-[11px] text-base-content/45">{{ row.hint }}</span>
-                </span>
-                <Icon v-if="position === index" name="ph:arrow-elbow-down-left" class="size-3.5 shrink-0 text-base-content/35" />
-              </button>
-            </li>
-            <li v-if="rows.length === 0" class="px-2 py-6 text-center text-[13px] text-base-content/45">
-              Rien ne correspond.
-            </li>
-          </ul>
+        <div class="mx-auto mt-[12vh] w-full max-w-xl" role="dialog" aria-label="Recherche et commandes" @keydown.esc="commandPaletteOpen = false">
+          <AiSearch
+            ref="search"
+            v-model="query"
+            :items="searchItems"
+            :filter="false"
+            placeholder="Un appareil, une page, ou une question"
+            empty-title="Rien ne correspond"
+            empty-hint="Essayez une autre recherche, ou posez la question à l'assistant"
+            @select="onSelect"
+          />
         </div>
       </div>
     </Transition>

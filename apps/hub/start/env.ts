@@ -16,5 +16,7 @@ export default await Env.create(new URL('../', import.meta.url), {
   PORT: Env.schema.number(),
   APP_KEY: Env.schema.string(),
   HOST: Env.schema.string({ format: 'host' }),
+  /** Public names the hub may be reached under (a reverse proxy), comma separated. */
+  HUB_ALLOWED_HOSTS: Env.schema.string.optional(),
   LOG_LEVEL: Env.schema.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']),
 })

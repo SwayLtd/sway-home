@@ -1,4 +1,6 @@
 @import 'tailwindcss';
+/* The agent interface kit (components/ai), on the theme below. */
+@import './ai.css';
 @plugin 'daisyui' {
   themes: false;
 }

@@ -15,11 +15,94 @@
  * which is the point: the product has to be useful before it is paid for.
  */
 
-import type { Routine } from '@sway-home/shared'
+import type { Routine, RoutineAlternative } from '@sway-home/shared'
 import { database, nowIso } from '#db/database'
 import { bus } from '#services/event_bus'
 import { deviceRepository } from '#repositories/device_repository'
 import { alerts, places, routines, settings } from '#repositories/store'
+
+type Weekday = 'mon' | 'tue' | 'wed' | 'thu' | 'fri' | 'sat' | 'sun'
+/** `Date.getDay()` order: Sunday first. */
+const WEEKDAYS: Weekday[] = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat']
+const WORKDAYS: Weekday[] = ['mon', 'tue', 'wed', 'thu', 'fri']
+const WEEKEND: Weekday[] = ['sat', 'sun']
+
+export interface Habit {
+  deviceId: string
+  deviceName: string
+  command: string
+  hour: number
+  occurrences: number
+  /** The days it happens on; empty means every day. */
+  days: Weekday[]
+}
+
+const HABIT_VERB: Record<string, string> = {
+  turnOn: 'allumer',
+  turnOff: 'éteindre',
+  toggle: 'basculer',
+  open: 'ouvrir',
+  close: 'fermer',
+  lock: 'verrouiller',
+  unlock: 'déverrouiller',
+  play: 'lancer la lecture',
+  pause: 'mettre en pause',
+}
+
+/**
+ * The days a habit happens on: weekdays when four presses in five fall on them, the weekend
+ * likewise, every day otherwise.
+ */
+export function habitDays(counts: Partial<Record<Weekday, number>>): Weekday[] {
+  const total = Object.values(counts).reduce((sum, count) => sum + (count ?? 0), 0)
+  if (total === 0) return []
+  const share = (days: Weekday[]) => days.reduce((sum, day) => sum + (counts[day] ?? 0), 0) / total
+  if (share(WORKDAYS) >= 0.8) return [...WORKDAYS]
+  if (share(WEEKEND) >= 0.8) return [...WEEKEND]
+  return []
+}
+
+/** How sure the hub is about a habit: more presses, more certainty, never all of it. */
+export function habitConfidence(occurrences: number): number {
+  return Math.min(0.95, 0.35 + 0.05 * occurrences)
+}
+
+/**
+ * Other ways to do what a habit does: every day (or weekdays only), at sunrise for a morning
+ * habit or sunset for an evening one, and on the first movement in the room when the room has
+ * a motion sensor, around the usual hour.
+ */
+function habitAlternatives(habit: Habit, areaId: string | null): RoutineAlternative[] {
+  const at = `${String(habit.hour).padStart(2, '0')}:00`
+  const out: RoutineAlternative[] = []
+
+  if (habit.days.length > 0) {
+    out.push({ id: 'every-day', title: 'Tous les jours', description: `À ${habit.hour} h, week-end compris.`, triggers: [{ kind: 'time', at, days: [] }] })
+  } else {
+    out.push({ id: 'weekdays', title: 'En semaine seulement', description: `À ${habit.hour} h, du lundi au vendredi.`, triggers: [{ kind: 'time', at, days: [...WORKDAYS] }] })
+  }
+
+  if (habit.hour >= 5 && habit.hour <= 10) {
+    out.push({ id: 'sunrise', title: 'Au lever du soleil', description: "Suit l'heure du lever au fil des saisons.", triggers: [{ kind: 'sun', event: 'sunrise', offsetMinutes: 0 }] })
+  } else if (habit.hour >= 16 && habit.hour <= 21) {
+    out.push({ id: 'sunset', title: 'Au coucher du soleil', description: "Suit l'heure du coucher au fil des saisons.", triggers: [{ kind: 'sun', event: 'sunset', offsetMinutes: 0 }] })
+  }
+
+  const motion = areaId ? deviceRepository.all({ areaId, capability: 'motion' })[0] : undefined
+  if (motion) {
+    const from = `${String(Math.max(0, habit.hour - 1)).padStart(2, '0')}:00`
+    const to = `${String(Math.min(23, habit.hour + 2)).padStart(2, '0')}:00`
+    out.push({
+      id: 'motion',
+      title: 'Au premier mouvement',
+      description: `Quand ${motion.name} détecte quelqu'un, entre ${Math.max(0, habit.hour - 1)} h et ${Math.min(23, habit.hour + 2)} h.`,
+      triggers: [{ kind: 'device_state', deviceId: motion.id, attribute: 'motion', operator: 'changed_to', value: true, forSeconds: 0 }],
+      conditions: [{ kind: 'time_window', after: from, before: to, days: [] }],
+    })
+  }
+
+  return out
+}
 
 class InsightEngine {
   #rollupTimer: ReturnType<typeof setInterval> | null = null
@@ -297,7 +380,16 @@ class InsightEngine {
     const existing = routines.all().map((routine) => routine.name)
     const created: Routine[] = []
 
-    const propose = (draft: { name: string; description: string; reason: string; triggers: Routine['triggers']; conditions?: Routine['conditions']; actions: Routine['actions'] }) => {
+    const propose = (draft: {
+      name: string
+      description: string
+      reason: string
+      confidence: number
+      alternatives?: RoutineAlternative[]
+      triggers: Routine['triggers']
+      conditions?: Routine['conditions']
+      actions: Routine['actions']
+    }) => {
       if (existing.includes(draft.name)) return
       const routine = routines.create({
         name: draft.name,
@@ -310,6 +402,8 @@ class InsightEngine {
         authoredBy: 'agent',
         status: 'suggested',
         suggestionReason: draft.reason,
+        confidence: draft.confidence,
+        alternatives: draft.alternatives ?? [],
         areaId: device.areaId,
       })
       created.push(routine)
@@ -326,17 +420,21 @@ class InsightEngine {
     if (capabilities.has('motion') && device.areaId) {
       const lights = deviceRepository.all({ areaId: device.areaId, capability: 'onoff' }).filter((candidate) => candidate.category === 'light')
       if (lights.length > 0) {
+        const selector = { areaId: device.areaId, capability: 'onoff', category: 'light', tag: null }
+        const lightOn = { kind: 'device_command' as const, deviceId: null, selector, command: 'turnOn', args: { transitionMs: 600 } }
+        const waitStill = { kind: 'wait_until' as const, condition: { kind: 'device_state' as const, deviceId: device.id, attribute: 'motion', operator: 'eq' as const, value: false }, timeoutSeconds: 900 }
+        const lightOff = { kind: 'device_command' as const, deviceId: null, selector, command: 'turnOff', args: { transitionMs: 2000 } }
         propose({
-          name: `${areaName ?? 'Room'}: light on movement`,
-          description: `Turns the lights on when ${device.name} sees movement, and off two minutes after it stops.`,
-          reason: `${device.name} was just added and there ${lights.length === 1 ? 'is a light' : `are ${lights.length} lights`} in the same room.`,
+          name: `${areaName ?? 'Pièce'} : lumière au passage`,
+          description: `Allume les lumières quand ${device.name} détecte un mouvement, et les éteint deux minutes après.`,
+          reason: `${device.name} vient d'arriver et ${lights.length === 1 ? 'une lumière est' : `${lights.length} lumières sont`} dans la même pièce.`,
+          confidence: 0.8,
           triggers: [{ kind: 'device_state', deviceId: device.id, attribute: 'motion', operator: 'changed_to', value: true, forSeconds: 0 }],
           conditions: [{ kind: 'sun_position', state: 'below_horizon' }],
-          actions: [
-            { kind: 'device_command', deviceId: null, selector: { areaId: device.areaId, capability: 'onoff', category: 'light', tag: null }, command: 'turnOn', args: { transitionMs: 600 } },
-            { kind: 'wait_until', condition: { kind: 'device_state', deviceId: device.id, attribute: 'motion', operator: 'eq', value: false }, timeoutSeconds: 900 },
-            { kind: 'delay', seconds: 120 },
-            { kind: 'device_command', deviceId: null, selector: { areaId: device.areaId, capability: 'onoff', category: 'light', tag: null }, command: 'turnOff', args: { transitionMs: 2000 } },
+          actions: [lightOn, waitStill, { kind: 'delay', seconds: 120 }, lightOff],
+          alternatives: [
+            { id: 'all-day', title: 'De jour comme de nuit', description: 'Sans attendre le coucher du soleil.', conditions: [] },
+            { id: 'five-minutes', title: 'Éteindre après 5 min', description: 'Plus de temps avant que la lumière ne s\'éteigne.', actions: [lightOn, waitStill, { kind: 'delay', seconds: 300 }, lightOff] },
           ],
         })
       }
@@ -344,45 +442,61 @@ class InsightEngine {
 
     if (capabilities.has('contact') && device.areaId) {
       const thermostats = deviceRepository.all({ areaId: device.areaId, capability: 'thermostat' })
-      if (thermostats.length > 0 && thermostats[0]) {
+      const thermostat = thermostats[0]
+      if (thermostat) {
         propose({
-          name: `${areaName ?? 'Room'}: pause the heating when the window opens`,
-          description: `Switches ${thermostats[0].name} off while ${device.name} is open, and restores it when it closes.`,
-          reason: 'A contact sensor and a thermostat in the same room is the cheapest saving in the house.',
+          name: `${areaName ?? 'Pièce'} : couper le chauffage fenêtre ouverte`,
+          description: `Éteint ${thermostat.name} tant que ${device.name} est ouvert, et le rallume à la fermeture.`,
+          reason: 'Un capteur d\'ouverture et un thermostat dans la même pièce : la première économie de la maison.',
+          confidence: 0.85,
           triggers: [{ kind: 'device_state', deviceId: device.id, attribute: 'open', operator: 'changed_to', value: true, forSeconds: 60 }],
           actions: [
-            { kind: 'device_command', deviceId: thermostats[0].id, selector: null, command: 'setHvacMode', args: { mode: 'off' } },
+            { kind: 'device_command', deviceId: thermostat.id, selector: null, command: 'setHvacMode', args: { mode: 'off' } },
             { kind: 'wait_until', condition: { kind: 'device_state', deviceId: device.id, attribute: 'open', operator: 'eq', value: false }, timeoutSeconds: 3600 },
-            { kind: 'device_command', deviceId: thermostats[0].id, selector: null, command: 'setHvacMode', args: { mode: 'heat' } },
+            { kind: 'device_command', deviceId: thermostat.id, selector: null, command: 'setHvacMode', args: { mode: 'heat' } },
+          ],
+          alternatives: [
+            {
+              id: 'after-5-min',
+              title: 'Après 5 min ouverte',
+              description: 'Laisse le temps d\'aérer sans couper le chauffage.',
+              triggers: [{ kind: 'device_state', deviceId: device.id, attribute: 'open', operator: 'changed_to', value: true, forSeconds: 300 }],
+            },
           ],
         })
       }
     }
 
     if (capabilities.has('lock')) {
+      const lock = { kind: 'device_command' as const, deviceId: device.id, selector: null, command: 'lock', args: {} }
       propose({
-        name: `Lock ${device.name} at night`,
-        description: 'Locks the door every night at 23:00 if it is not already locked.',
-        reason: 'A lock that is only locked by hand is a lock that is sometimes not locked.',
+        name: `Verrouiller ${device.name} la nuit`,
+        description: 'Verrouille la porte chaque soir à 23 h si elle ne l\'est pas déjà.',
+        reason: 'Une serrure qu\'on ne ferme qu\'à la main reste parfois ouverte.',
+        confidence: 0.7,
         triggers: [{ kind: 'time', at: '23:00', days: [] }],
         conditions: [{ kind: 'device_state', deviceId: device.id, attribute: 'locked', operator: 'eq', value: false }],
-        actions: [
-          { kind: 'device_command', deviceId: device.id, selector: null, command: 'lock', args: {} },
-          { kind: 'notify', message: `${device.name} was locked for the night.`, channel: 'web', priority: 'low' },
+        actions: [lock, { kind: 'notify', message: `${device.name} a été verrouillée pour la nuit.`, channel: 'web', priority: 'low' }],
+        alternatives: [
+          { id: '22h', title: 'À 22 h', description: 'Une heure plus tôt.', triggers: [{ kind: 'time', at: '22:00', days: [] }] },
+          { id: 'night-mode', title: 'En passant en mode Nuit', description: 'Quand la maison se met en mode Nuit, à l\'heure où on se couche.', triggers: [{ kind: 'house_mode', mode: 'night' }] },
+          { id: 'last-leaves', title: 'Quand tout le monde part', description: 'Au départ de la dernière personne.', triggers: [{ kind: 'presence', personId: null, transition: 'last_leaves' }] },
         ],
       })
     }
 
     if (capabilities.has('waterLeak')) {
       const valves = deviceRepository.all({ capability: 'valve' })
+      const valve = valves[0]
       propose({
-        name: `Water leak: ${device.name}`,
-        description: valves.length > 0 ? 'Closes the water valve and raises a critical alert.' : 'Raises a critical alert the moment water is detected.',
-        reason: 'A leak detector with no routine behind it is a sensor that beeps into an empty flat.',
+        name: `Fuite d'eau : ${device.name}`,
+        description: valve ? "Ferme la vanne d'eau et déclenche une alerte critique." : "Déclenche une alerte critique dès que de l'eau est détectée.",
+        reason: 'Un détecteur de fuite sans routine, c\'est une alarme qui sonne dans un appartement vide.',
+        confidence: 0.95,
         triggers: [{ kind: 'device_state', deviceId: device.id, attribute: 'leak', operator: 'changed_to', value: true, forSeconds: 0 }],
         actions: [
-          ...(valves.length > 0 && valves[0] ? [{ kind: 'device_command' as const, deviceId: valves[0].id, selector: null, command: 'closeValve', args: {} }] : []),
-          { kind: 'notify', message: `Water detected by ${device.name}.`, title: 'Leak', channel: 'all', priority: 'critical' },
+          ...(valve ? [{ kind: 'device_command' as const, deviceId: valve.id, selector: null, command: 'closeValve', args: {} }] : []),
+          { kind: 'notify', message: `De l'eau a été détectée par ${device.name}.`, title: 'Fuite', channel: 'all', priority: 'critical' },
           { kind: 'speak', text: `Attention, fuite d'eau détectée par ${device.name}.`, deviceId: null },
         ],
       })
@@ -390,12 +504,21 @@ class InsightEngine {
 
     if (capabilities.has('power') && device.category === 'outlet') {
       propose({
-        name: `${device.name}: tell me when it is finished`,
-        description: 'Watches the power draw and says when the appliance has stopped.',
-        reason: 'A plug with energy metering can tell you the washing is done without any extra hardware.',
+        name: `${device.name} : prévenir quand c'est fini`,
+        description: "Surveille la consommation et prévient quand l'appareil branché s'est arrêté.",
+        reason: 'Une prise qui mesure la consommation sait dire que la lessive est finie, sans rien ajouter.',
+        confidence: 0.6,
         triggers: [{ kind: 'device_state', deviceId: device.id, attribute: 'power', operator: 'lt', value: 5, forSeconds: 300 }],
         conditions: [],
-        actions: [{ kind: 'notify', message: `${device.name} has finished.`, channel: 'all', priority: 'normal' }],
+        actions: [{ kind: 'notify', message: `${device.name} a terminé.`, channel: 'all', priority: 'normal' }],
+        alternatives: [
+          {
+            id: 'ten-minutes',
+            title: 'Après 10 min sous 5 W',
+            description: 'Pour les appareils qui marquent des pauses, comme un lave-vaisselle.',
+            triggers: [{ kind: 'device_state', deviceId: device.id, attribute: 'power', operator: 'lt', value: 5, forSeconds: 600 }],
+          },
+        ],
       })
     }
 
@@ -404,63 +527,110 @@ class InsightEngine {
 
   /**
    * Habits in the event log: the same manual command at roughly the same time on several
-   * days is a routine waiting to be written.
+   * days is a routine waiting to be written. Grouped by the local hour of each press - the
+   * hour a time trigger is written in - and with the days of the week it happened on.
    */
-  findHabits(minOccurrences = 4): { deviceId: string; deviceName: string; command: string; hour: number; occurrences: number }[] {
-    const rows = database().all<{ subject_id: string; command: string; hour: number; occurrences: number }>(
-      `SELECT subject_id,
-              json_extract(payload, '$.command') AS command,
-              CAST(strftime('%H', at) AS INTEGER) AS hour,
-              COUNT(*) AS occurrences
-       FROM events
-       WHERE type = 'device.command_sent' AND origin = 'user' AND at > datetime('now', '-21 days')
-       GROUP BY subject_id, command, hour
-       HAVING occurrences >= ?
-       ORDER BY occurrences DESC
-       LIMIT 20`,
-      [minOccurrences]
+  findHabits(minOccurrences = 4): Habit[] {
+    const since = new Date(Date.now() - 21 * 86_400_000).toISOString()
+    const rows = database().all<{ subject_id: string; at: string; payload: string }>(
+      `SELECT subject_id, at, payload FROM events
+       WHERE type = 'device.command_sent' AND origin = 'user' AND at > ?
+       ORDER BY at DESC LIMIT 5000`,
+      [since]
     )
 
-    return rows
-      .map((row) => {
-        const device = deviceRepository.find(row.subject_id)
-        return device ? { deviceId: device.id, deviceName: device.name, command: String(row.command), hour: Number(row.hour), occurrences: Number(row.occurrences) } : null
+    const groups = new Map<string, { deviceId: string; command: string; hour: number; occurrences: number; days: Partial<Record<Weekday, number>> }>()
+    for (const row of rows) {
+      let command: string
+      try {
+        command = String((JSON.parse(row.payload) as { command?: unknown }).command ?? '')
+      } catch {
+        continue
+      }
+      if (!command) continue
+      const at = new Date(row.at)
+      const hour = at.getHours()
+      const day = WEEKDAYS[at.getDay()]!
+      const key = `${row.subject_id}|${command}|${hour}`
+      const group = groups.get(key) ?? { deviceId: row.subject_id, command, hour, occurrences: 0, days: {} }
+      group.occurrences += 1
+      group.days[day] = (group.days[day] ?? 0) + 1
+      groups.set(key, group)
+    }
+
+    return [...groups.values()]
+      .filter((group) => group.occurrences >= minOccurrences)
+      .sort((a, b) => b.occurrences - a.occurrences)
+      .slice(0, 20)
+      .map((group) => {
+        const device = deviceRepository.find(group.deviceId)
+        return device
+          ? { deviceId: device.id, deviceName: device.name, command: group.command, hour: group.hour, occurrences: group.occurrences, days: habitDays(group.days) }
+          : null
       })
-      .filter((habit): habit is NonNullable<typeof habit> => habit !== null)
+      .filter((habit): habit is Habit => habit !== null)
   }
 
-  /** Turn a detected habit into a suggested routine. */
+  /** Turn a detected habit into a suggested routine, with the other ways to do it. */
   suggestFromHabits(): Routine[] {
     const created: Routine[] = []
     const existing = routines.all().map((routine) => routine.name)
 
     for (const habit of this.findHabits()) {
-      const name = `${habit.deviceName} at ${String(habit.hour).padStart(2, '0')}:00`
+      const verb = HABIT_VERB[habit.command] ?? habit.command
+      const name = `${habit.deviceName} : ${verb} à ${habit.hour} h`
       if (existing.includes(name)) continue
+
+      const device = deviceRepository.find(habit.deviceId)
+      const at = `${String(habit.hour).padStart(2, '0')}:00`
+      const when = habit.days.length === 5 && !habit.days.includes('sat') ? ', en semaine' : habit.days.length === 2 && habit.days.includes('sat') ? ', le week-end' : ''
+      const reason = `Fait à la main ${habit.occurrences} fois en trois semaines, vers ${habit.hour} h${when}.`
 
       const routine = routines.create({
         name,
-        description: `You have run this by hand ${habit.occurrences} times in the last three weeks, always around ${habit.hour}:00.`,
+        description: `Refait chaque jour à ${habit.hour} h ce que vous faites à la main.`,
         enabled: true,
         mode: 'single',
-        triggers: [{ kind: 'time', at: `${String(habit.hour).padStart(2, '0')}:00`, days: [] }],
+        triggers: [{ kind: 'time', at, days: habit.days }],
         conditions: [],
         actions: [{ kind: 'device_command', deviceId: habit.deviceId, selector: null, command: habit.command, args: {} }],
         authoredBy: 'agent',
         status: 'suggested',
-        suggestionReason: `Observed ${habit.occurrences} times in 21 days.`,
-        areaId: deviceRepository.find(habit.deviceId)?.areaId ?? null,
+        suggestionReason: reason,
+        confidence: habitConfidence(habit.occurrences),
+        alternatives: habitAlternatives(habit, device?.areaId ?? null),
+        areaId: device?.areaId ?? null,
       })
       created.push(routine)
       bus.publish('automation.suggested', {
         subjectType: 'automation',
         subjectId: routine.id,
         origin: 'agent',
-        payload: { name: routine.name, reason: routine.suggestionReason, occurrences: habit.occurrences },
+        payload: { name: routine.name, reason, occurrences: habit.occurrences },
       })
     }
 
     return created
+  }
+
+  /**
+   * Approve a suggested routine, as proposed or with one of its alternatives: the parts the
+   * alternative carries (trigger, conditions, actions) replace the routine's. An unknown
+   * alternative approves nothing.
+   */
+  approveSuggestion(routineId: string, alternativeId?: string): Routine | null {
+    const routine = routines.find(routineId)
+    if (!routine) return null
+    const alternative = alternativeId ? routine.alternatives?.find((candidate) => candidate.id === alternativeId) : undefined
+    if (alternativeId && !alternative) return null
+
+    return routines.update(routineId, {
+      status: 'active',
+      enabled: true,
+      ...(alternative?.triggers ? { triggers: alternative.triggers } : {}),
+      ...(alternative?.conditions ? { conditions: alternative.conditions } : {}),
+      ...(alternative?.actions ? { actions: alternative.actions } : {}),
+    })
   }
 
   /** A short morning summary, built without a model. */

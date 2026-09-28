@@ -42,6 +42,9 @@ export const EVENT_TYPES = [
   'agent.action_rejected',
   'agent.autonomy_changed',
   'agent.insight',
+  'agent.feedback',
+  'task.updated',
+  'teach.updated',
 
   'voice.wake',
   'voice.transcript',

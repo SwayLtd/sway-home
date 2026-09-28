@@ -81,6 +81,7 @@ export const houseService = {
           description: `${device.name}: ${command}`,
           origin: options.origin ?? 'user',
           commands: [{ deviceId: device.id, command: result.undo.command, args: result.undo.args }],
+          correlationId,
         })
       }
     } else {
@@ -124,6 +125,7 @@ export const houseService = {
         description: describeSelector(selector, command, targets.length),
         origin: options.origin ?? 'user',
         commands: undoCommands,
+        correlationId,
       })
     }
 
@@ -187,7 +189,7 @@ export const houseService = {
     }
 
     if (undoCommands.length > 0) {
-      undo.push({ description: `Scene: ${scene.name}`, origin: options.origin ?? 'user', commands: undoCommands })
+      undo.push({ description: `Scene: ${scene.name}`, origin: options.origin ?? 'user', commands: undoCommands, correlationId })
     }
 
     bus.publish('scene.activated', {

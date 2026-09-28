@@ -2,71 +2,61 @@
 /**
  * The quick-tool dock.
  *
- * Four tools that are useful *while doing something else*, which is what a dock is for:
- * the assistant, live activity, the network scan, and the proposals waiting for a yes.
- * A tool that needs the whole screen is a page, not a dock panel.
+ * Five tools that are useful *while doing something else*, which is what a dock is for:
+ * the assistant, live activity, the network scan, the proposals waiting for a yes, and
+ * what the hub is busy with. A tool that needs the whole screen is a page, not a dock panel.
  */
+import type { ReviewedProposal } from '~/components/ProposalReview.vue'
 
 const { dockTool } = useShell()
 const { house, events, refresh, deviceById } = useHouse()
+const { preferences } = useAiPreferences()
+const { tasks: hubTasks, rows: taskRows, load: loadTasks, cancel: cancelTask, retry: retryTask } = useTasks()
 
 const TITLES: Record<string, { label: string; icon: string }> = {
   agent: { label: 'Assistant', icon: 'ph:chat-circle-dots' },
   timeline: { label: 'Activité', icon: 'ph:pulse' },
   scan: { label: 'Scan réseau', icon: 'ph:broadcast' },
   proposals: { label: 'Propositions', icon: 'ph:seal-question' },
+  tasks: { label: 'Tâches', icon: 'ph:list-checks' },
 }
 
 const title = computed(() => TITLES[dockTool.value ?? 'agent'] ?? TITLES.agent!)
 
 // --- scan ---------------------------------------------------------------------------
 const scanning = computed(() => house.value?.scan.running ?? false)
-const phase = computed(() => house.value?.scan.phase ?? null)
-const PHASE_LABEL: Record<string, string> = {
-  arp: 'Table ARP',
-  mdns: 'mDNS / Bonjour',
-  ssdp: 'SSDP / UPnP',
-  sweep: 'Balayage TCP',
-  deep: 'Ports étendus',
-  names: 'Noms NetBIOS',
-  http: 'Bannières HTTP',
-  fingerprint: 'Identification',
-}
+// The scan's own task rows: the same phases this panel used to draw as a hand-made bar,
+// now with per-phase status, detail and a retry/cancel that the bar never had.
+const scanTaskRows = computed(() => hubTasks.value.filter((task) => task.kind === 'scan').map(toTaskRow))
 
 async function startScan(deep: boolean) {
   await hubFetch('/scan', { method: 'POST', body: { quick: !deep, deep } })
 }
 
 // --- proposals ----------------------------------------------------------------------
-interface Proposal {
-  id: string
-  summary: string
-  reason: string
-  risk: string
-  commands: { deviceId: string; deviceName: string; command: string; args: Record<string, unknown> }[]
-  expiresAt: string
-}
-const proposals = ref<Proposal[]>([])
-const busy = ref<string | null>(null)
+const proposals = ref<ReviewedProposal[]>([])
 
 async function loadProposals() {
-  proposals.value = (await hubFetch<{ proposals: Proposal[] }>('/agent/proposals')).proposals
+  proposals.value = (await hubFetch<{ proposals: ReviewedProposal[] }>('/agent/proposals')).proposals
 }
 
-async function decide(id: string, approve: boolean) {
-  busy.value = id
-  try {
-    await hubFetch(`/agent/proposals/${id}/${approve ? 'approve' : 'reject'}`, { method: 'POST' })
-    await loadProposals()
-    await refresh()
-  } finally {
-    busy.value = null
-  }
+async function onDecided() {
+  await loadProposals()
+  await refresh()
 }
 
-watch(dockTool, (tool) => {
-  if (tool === 'proposals') void loadProposals()
-}, { immediate: true })
+// --- tasks ----------------------------------------------------------------------------
+const TASKS_EMPTY = 'Rien à faire en ce moment.'
+
+watch(
+  dockTool,
+  (tool) => {
+    if (tool === 'proposals') void loadProposals()
+    // The scan panel shows scan tasks too, so it needs the same list loaded.
+    if (tool === 'tasks' || tool === 'scan') void loadTasks()
+  },
+  { immediate: true }
+)
 
 // --- activity -------------------------------------------------------------------------
 // Wording and icons live in useEvents so the dock and the journal page cannot drift apart.
@@ -114,20 +104,7 @@ const label = (event: HouseEventView) => eventLabel(event, (id) => deviceById.va
           <span class="tabular text-base-content/50">{{ house?.scan.hostCount ?? 0 }} hôtes</span>
         </div>
 
-        <div v-if="scanning && phase" class="mt-3">
-          <div class="flex items-center justify-between text-[11px] text-base-content/60">
-            <span>{{ PHASE_LABEL[phase.phase] ?? phase.phase }}</span>
-            <span class="tabular">{{ phase.total > 1 ? `${phase.done}/${phase.total}` : '' }}</span>
-          </div>
-          <div class="mt-1 h-1 overflow-hidden rounded-full bg-base-300">
-            <div
-              class="h-full rounded-full bg-base-content transition-[width] duration-300"
-              :style="{ width: `${phase.total > 0 ? Math.round((phase.done / phase.total) * 100) : 40}%` }"
-            />
-          </div>
-        </div>
-
-        <p v-else-if="house?.scan.finishedAt" class="mt-2 text-[11px] text-base-content/50">
+        <p v-if="!scanning && house?.scan.finishedAt" class="mt-2 text-[11px] text-base-content/50">
           Dernier scan {{ formatRelative(house.scan.finishedAt) }} en {{ (house.scan.durationMs / 1000).toFixed(1) }} s,
           {{ house.scan.newDevices }} nouveaux appareils.
         </p>
@@ -137,6 +114,10 @@ const label = (event: HouseEventView) => eventLabel(event, (id) => deviceById.va
           <button class="btn btn-sm btn-outline flex-1" :disabled="scanning" @click="startScan(true)">Scan complet</button>
         </div>
       </div>
+
+      <!-- The scan's own task rows carry the same phases the old progress bar drew, plus a
+           retry and a cancel it never had. -->
+      <AiTaskRows v-if="scanTaskRows.length" class="mt-3" :variant="preferences.tasks" :tasks="scanTaskRows" @retry="retryTask" @cancel="cancelTask" />
 
       <NuxtLink to="/network" class="mt-3 flex items-center gap-2 rounded-xl border border-base-300 p-3 text-[13px] transition-colors hover:bg-base-200">
         <Icon name="ph:list-magnifying-glass" class="size-4" />
@@ -152,38 +133,19 @@ const label = (event: HouseEventView) => eventLabel(event, (id) => deviceById.va
         <p class="mt-2 text-[13px] text-base-content/50">Rien n'attend votre accord.</p>
       </div>
 
-      <article
-        v-for="proposal in proposals"
-        :key="proposal.id"
-        class="mb-3 rounded-xl border border-base-300 bg-base-100 p-3"
-      >
-        <div class="flex items-start gap-2">
-          <span
-            class="mt-0.5 rounded-full px-1.5 py-0.5 text-[10px] font-semibold uppercase"
-            :class="proposal.risk === 'high' ? 'bg-error/15 text-error' : 'bg-warning/15 text-warning'"
-          >{{ proposal.risk }}</span>
-          <p class="min-w-0 flex-1 text-[13px] font-medium">{{ proposal.summary }}</p>
-        </div>
-        <p class="mt-1 text-[12px] text-base-content/60">{{ proposal.reason }}</p>
-
-        <ul class="mt-2 space-y-0.5">
-          <li v-for="(command, index) in proposal.commands.slice(0, 4)" :key="index" class="text-[11px] text-base-content/50">
-            {{ command.deviceName }} · {{ command.command }}
-          </li>
-          <li v-if="proposal.commands.length > 4" class="text-[11px] text-base-content/40">
-            et {{ proposal.commands.length - 4 }} autres
-          </li>
-        </ul>
-
-        <div class="mt-3 flex gap-2">
-          <button class="btn btn-sm admin-cta flex-1" :disabled="busy === proposal.id" @click="decide(proposal.id, true)">
-            Approuver
-          </button>
-          <button class="btn btn-sm btn-outline flex-1" :disabled="busy === proposal.id" @click="decide(proposal.id, false)">
-            Refuser
-          </button>
-        </div>
+      <article v-for="proposal in proposals" :key="proposal.id" class="mb-3 rounded-xl border border-base-300 bg-base-100 p-3">
+        <ProposalReview :proposal="proposal" compact @decided="onDecided" />
       </article>
+    </div>
+
+    <!-- Tasks -->
+    <div v-else-if="dockTool === 'tasks'" class="min-h-0 flex-1 overflow-y-auto px-3 pb-4 thin-scroll">
+      <div v-if="taskRows.length === 0" class="py-10 text-center">
+        <Icon name="ph:check-circle" class="mx-auto size-8 text-base-content/25" />
+        <p class="mt-2 text-[13px] text-base-content/50">{{ TASKS_EMPTY }}</p>
+      </div>
+
+      <AiTaskRows v-else :variant="preferences.tasks" :tasks="taskRows" @retry="retryTask" @cancel="cancelTask" />
     </div>
   </div>
 </template>

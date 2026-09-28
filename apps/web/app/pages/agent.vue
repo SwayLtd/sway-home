@@ -20,7 +20,6 @@ interface Status {
   budgetUsd: number
   toolCount: number
   fallbackOnly: boolean
-  conversations: { id: string; title: string; updatedAt: string; messageCount: number }[]
 }
 
 interface Reflex {
@@ -75,7 +74,78 @@ async function openConversation(id: string) {
 async function newConversation() {
   conversationId.value = (await hubFetch<{ id: string }>('/agent/conversations', { method: 'POST' })).id
   messages.value = []
-  await load()
+  await loadConversations()
+}
+
+// ---------------------------------------------------------------------------------------
+// Conversations: searchable, pinned first, with an archive - the hub folds accents itself.
+// ---------------------------------------------------------------------------------------
+
+interface ConversationSummary {
+  id: string
+  title: string
+  pinned: boolean
+  archived: boolean
+  updatedAt: string
+  messageCount: number
+}
+
+const conversations = ref<ConversationSummary[]>([])
+const conversationsLoading = ref(false)
+const conversationQuery = ref('')
+const debouncedQuery = refDebounced(conversationQuery, 250)
+const archivedTab = ref(false)
+const editingId = ref<string | null>(null)
+const editTitle = ref('')
+
+async function loadConversations() {
+  conversationsLoading.value = true
+  try {
+    conversations.value = (
+      await hubFetch<{ conversations: ConversationSummary[] }>('/agent/conversations', {
+        query: { q: debouncedQuery.value.trim() || undefined, archived: archivedTab.value ? '1' : undefined },
+      })
+    ).conversations
+  } finally {
+    conversationsLoading.value = false
+  }
+}
+onMounted(loadConversations)
+watch([debouncedQuery, archivedTab], loadConversations)
+
+function startRename(conversation: ConversationSummary) {
+  editingId.value = conversation.id
+  editTitle.value = conversation.title
+}
+
+/** Enter and blur both land here - the id guard is what makes that safe to call twice. */
+async function saveTitle(conversation: ConversationSummary) {
+  if (editingId.value !== conversation.id) return
+  editingId.value = null
+  const title = editTitle.value.trim()
+  if (!title || title === conversation.title) return
+  await hubFetch(`/agent/conversations/${conversation.id}`, { method: 'PATCH', body: { title } })
+  conversation.title = title
+}
+
+async function togglePin(conversation: ConversationSummary) {
+  await hubFetch(`/agent/conversations/${conversation.id}`, { method: 'PATCH', body: { pinned: !conversation.pinned } })
+  await loadConversations()
+}
+
+async function toggleArchive(conversation: ConversationSummary) {
+  await hubFetch(`/agent/conversations/${conversation.id}`, { method: 'PATCH', body: { archived: !conversation.archived } })
+  await loadConversations()
+}
+
+async function removeConversation(conversation: ConversationSummary) {
+  if (!window.confirm(`Supprimer « ${conversation.title} » ? Cette action est définitive.`)) return
+  await hubFetch(`/agent/conversations/${conversation.id}`, { method: 'DELETE' })
+  if (conversationId.value === conversation.id) {
+    conversationId.value = null
+    messages.value = []
+  }
+  await loadConversations()
 }
 
 const AUTONOMY_ICON: Record<string, string> = {
@@ -176,23 +246,104 @@ const AUTONOMY_ICON: Record<string, string> = {
 
     <div class="grid gap-4 lg:grid-cols-[16rem_1fr]">
       <!-- Conversations -->
-      <aside class="hidden rounded-2xl border border-base-300 bg-base-100 p-2 lg:block">
-        <p class="px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-base-content/40">Conversations</p>
-        <button
-          v-for="conversation in status?.conversations ?? []"
-          :key="conversation.id"
-          class="block w-full rounded-lg px-2 py-2 text-left transition-colors"
-          :class="conversationId === conversation.id ? 'bg-primary/25' : 'hover:bg-base-200'"
-          @click="openConversation(conversation.id)"
-        >
-          <span class="block truncate text-[13px]">{{ conversation.title }}</span>
-          <span class="block text-[11px] tabular text-base-content/45">
-            {{ conversation.messageCount }} messages · {{ formatRelative(conversation.updatedAt) }}
-          </span>
-        </button>
-        <p v-if="!status?.conversations.length" class="px-2 py-6 text-center text-[12px] text-base-content/45">
-          Aucune conversation.
-        </p>
+      <!-- As tall as the chat beside it: the list scrolls on its own instead of stretching the page -->
+      <aside class="hidden h-[calc(100vh-22rem)] min-h-96 rounded-2xl border border-base-300 bg-base-100 p-2 lg:flex lg:flex-col">
+        <div class="mb-2 flex items-center gap-1 px-1 pt-1">
+          <AiButton size="xs" :variant="!archivedTab ? 'primary' : 'ghost'" class="flex-1" @click="archivedTab = false">Actives</AiButton>
+          <AiButton size="xs" :variant="archivedTab ? 'primary' : 'ghost'" class="flex-1" @click="archivedTab = true">Archivées</AiButton>
+        </div>
+
+        <div class="relative mb-2 px-1">
+          <Icon name="ph:magnifying-glass" class="pointer-events-none absolute left-3.5 top-1/2 size-3.5 -translate-y-1/2 text-ink-3" />
+          <input
+            v-model="conversationQuery"
+            type="text"
+            placeholder="Rechercher"
+            aria-label="Rechercher une conversation"
+            class="h-8 w-full rounded-[8px] bg-field pl-8 pr-2 text-[12.5px] text-ink outline-none placeholder:text-ink-3"
+          >
+        </div>
+
+        <div class="min-h-0 flex-1 overflow-y-auto thin-scroll">
+          <AiGlideMenu class="flex flex-col gap-px" highlight-class="inset-x-0 rounded-[8px] bg-hover-2">
+            <div
+              v-for="conversation in conversations"
+              :key="conversation.id"
+              data-menu-row
+              class="group relative z-10 flex items-center gap-0.5 rounded-[8px] px-1.5 py-1"
+              :class="conversationId === conversation.id ? 'bg-hover-2' : ''"
+            >
+              <button
+                v-if="editingId !== conversation.id"
+                type="button"
+                class="min-w-0 flex-1 rounded-[6px] px-1 py-0.5 text-left"
+                @click="openConversation(conversation.id)"
+              >
+                <span class="flex items-center gap-1">
+                  <Icon v-if="conversation.pinned" name="ph:push-pin-fill" class="size-3 shrink-0 text-ink-3" />
+                  <span class="truncate text-[13px]" :class="conversationId === conversation.id ? 'font-medium text-ink' : 'text-ink-2'">{{ conversation.title }}</span>
+                </span>
+                <span class="block truncate text-[11px] tabular-nums text-ink-3">
+                  {{ conversation.messageCount }} messages · {{ formatRelative(conversation.updatedAt) }}
+                </span>
+              </button>
+
+              <input
+                v-else
+                v-model="editTitle"
+                type="text"
+                aria-label="Renommer la conversation"
+                class="min-w-0 flex-1 rounded-[6px] bg-surface px-1.5 py-1 text-[13px] text-ink shadow-hairline outline-none"
+                @keydown.enter="saveTitle(conversation)"
+                @keydown.esc="editingId = null"
+                @blur="saveTitle(conversation)"
+              >
+
+              <span class="hidden shrink-0 items-center gap-0.5 group-hover:flex">
+                <button
+                  type="button"
+                  class="flex size-6 items-center justify-center rounded-[6px] text-ink-3 transition-colors hover:bg-hover-2 hover:text-ink"
+                  :aria-label="conversation.pinned ? 'Désépingler' : 'Épingler'"
+                  :title="conversation.pinned ? 'Désépingler' : 'Épingler'"
+                  @click.stop="togglePin(conversation)"
+                >
+                  <Icon :name="conversation.pinned ? 'ph:push-pin-slash' : 'ph:push-pin'" class="size-3.5" />
+                </button>
+                <button
+                  type="button"
+                  class="flex size-6 items-center justify-center rounded-[6px] text-ink-3 transition-colors hover:bg-hover-2 hover:text-ink"
+                  aria-label="Renommer"
+                  title="Renommer"
+                  @click.stop="startRename(conversation)"
+                >
+                  <Icon name="ph:pencil-simple" class="size-3.5" />
+                </button>
+                <button
+                  type="button"
+                  class="flex size-6 items-center justify-center rounded-[6px] text-ink-3 transition-colors hover:bg-hover-2 hover:text-ink"
+                  :aria-label="archivedTab ? 'Désarchiver' : 'Archiver'"
+                  :title="archivedTab ? 'Désarchiver' : 'Archiver'"
+                  @click.stop="toggleArchive(conversation)"
+                >
+                  <Icon :name="archivedTab ? 'ph:tray-arrow-up' : 'ph:archive'" class="size-3.5" />
+                </button>
+                <button
+                  type="button"
+                  class="flex size-6 items-center justify-center rounded-[6px] text-ink-3 transition-colors hover:bg-red-tint hover:text-red"
+                  aria-label="Supprimer"
+                  title="Supprimer"
+                  @click.stop="removeConversation(conversation)"
+                >
+                  <Icon name="ph:trash" class="size-3.5" />
+                </button>
+              </span>
+            </div>
+          </AiGlideMenu>
+
+          <p v-if="!conversationsLoading && conversations.length === 0" class="px-2 py-6 text-center text-[12px] text-ink-3">
+            {{ conversationQuery ? 'Aucune conversation trouvée.' : archivedTab ? 'Aucune conversation archivée.' : 'Aucune conversation.' }}
+          </p>
+        </div>
       </aside>
 
       <!-- Chat -->

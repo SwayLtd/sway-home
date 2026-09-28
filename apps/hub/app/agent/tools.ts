@@ -42,7 +42,7 @@ import { alerts, house, memories, people, places, routines, scenes, settings } f
 import { widgets } from '#repositories/widget_repository'
 import { describeSeries, energyByDevice, widgetService } from '#services/widget_service'
 import { describeEnergy, describeRanking } from '#agent/briefing'
-import { MEASURES, measureById } from '#agent/language'
+import { MEASURES, measureById, normalise } from '#agent/language'
 import { narrator } from '#services/narrator'
 import { autonomyEngine } from '#services/autonomy_engine'
 import { describeAutonomy } from '#agent/reflexes'
@@ -1195,6 +1195,76 @@ const setAutonomy = tool({
   },
 })
 
+// ---------------------------------------------------------------------------------------
+// Asking back
+// ---------------------------------------------------------------------------------------
+
+/** A stable id from a label: "Plafonnier salon" becomes "plafonnier-salon". */
+function slug(value: string, taken: Set<string>): string {
+  const base = normalise(value).replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 36) || 'choix'
+  let id = base
+  for (let index = 2; taken.has(id); index += 1) id = `${base}-${index}`
+  taken.add(id)
+  return id
+}
+
+/** An id given by the caller is kept as it is (a device id, "*" for all) when it is usable. */
+function keepOrSlug(id: string | undefined, label: string, taken: Set<string>): string {
+  if (id && /^[A-Za-z0-9*_.:-]{1,60}$/.test(id) && !taken.has(id)) {
+    taken.add(id)
+    return id
+  }
+  return slug(id || label, taken)
+}
+
+const askUser = tool({
+  name: 'ask_user',
+  description:
+    'Ask the person one to four short questions, each with two to eight options, when two choices are genuinely equivalent (which lamp, which day, which room). The run ends on the questions; the answer arrives as the next message. Never ask in plain text instead.',
+  risk: 'none',
+  readOnly: true,
+  parameters: z.object({
+    questions: z
+      .array(
+        z.object({
+          id: z.string().max(40).optional(),
+          title: z.string().min(1).max(160),
+          description: z.string().max(400).optional(),
+          options: z
+            .array(z.object({ id: z.string().max(60).optional(), label: z.string().min(1).max(80), hint: z.string().max(160).optional() }))
+            .min(2)
+            .max(8),
+          multiple: z.boolean().default(false),
+          allowOther: z.boolean().default(false),
+        })
+      )
+      .min(1)
+      .max(4),
+  }),
+  async execute(args, context) {
+    // A routine runs with nobody in front of the screen: a question would wait forever.
+    if (context.unattended) return fail("Personne à qui poser la question : décide ou abstiens-toi.")
+
+    const questionIds = new Set<string>()
+    const questions = args.questions.map((question) => {
+      const optionIds = new Set<string>()
+      return {
+        id: keepOrSlug(question.id, question.title, questionIds),
+        title: question.title,
+        ...(question.description ? { description: question.description } : {}),
+        options: question.options.map((option) => ({
+          id: keepOrSlug(option.id, option.label, optionIds),
+          label: option.label,
+          ...(option.hint ? { hint: option.hint } : {}),
+        })),
+        multiple: question.multiple,
+        allowOther: question.allowOther,
+      }
+    })
+    return ok(`Question posée : ${questions.map((question) => question.title).join(' / ')}. Attends la réponse.`, { questions })
+  },
+})
+
 export const AGENT_TOOLS: AgentTool<z.ZodType>[] = [
   listDevices as unknown as AgentTool<z.ZodType>,
   getDevice as unknown as AgentTool<z.ZodType>,
@@ -1236,6 +1306,7 @@ export const AGENT_TOOLS: AgentTool<z.ZodType>[] = [
   announce as unknown as AgentTool<z.ZodType>,
   getAutonomy as unknown as AgentTool<z.ZodType>,
   setAutonomy as unknown as AgentTool<z.ZodType>,
+  askUser as unknown as AgentTool<z.ZodType>,
 ]
 
 export function toolByName(name: string): AgentTool<z.ZodType> | undefined {

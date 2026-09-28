@@ -25,6 +25,8 @@ server.errorHandler(() => import('#exceptions/handler'))
 server.use([
   () => import('#middleware/container_bindings_middleware'),
   () => import('#middleware/force_json_response_middleware'),
+  // Before CORS: a foreign page or a rebound host name gets nothing, not even a preflight.
+  () => import('#middleware/origin_guard_middleware'),
   () => import('@adonisjs/cors/cors_middleware'),
 ])
 

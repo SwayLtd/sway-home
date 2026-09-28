@@ -24,6 +24,7 @@ interface EnergyResponse {
 }
 
 const { devices } = useHouse()
+const router = useRouter()
 const days = ref(7)
 const data = ref<EnergyResponse | null>(null)
 const loading = ref(true)
@@ -38,6 +39,29 @@ async function load() {
 }
 onMounted(load)
 watch(days, load)
+
+// ---------------------------------------------------------------------------------------
+// Insights: three readings of the house the hub has data for, as AiInsightCards pages.
+// ---------------------------------------------------------------------------------------
+
+const insightPages = ref<InsightCardPage[]>([])
+
+async function loadInsights() {
+  insightPages.value = insightsToPages((await hubFetch<{ insights: HubInsight[] }>('/insights')).insights)
+}
+onMounted(loadInsights)
+
+/** The follow-up pill: drop the question in the assistant's draft and go there. */
+function onAskInsight(prompt: string) {
+  useState<string | null>('agent-draft').value = prompt
+  void router.push('/')
+}
+
+/** A page can name where "voir plus" goes; most do not, and this is then a no-op. */
+function onNavigateInsight(_direction: -1 | 1, pageId: string) {
+  const link = insightPages.value.find((page) => page.id === pageId)?.link
+  if (link) void router.push(link)
+}
 
 const currency = computed(() => data.value?.tariff.currency ?? 'EUR')
 const totalKwh = computed(() => (data.value?.byDevice ?? []).reduce((sum, row) => sum + row.kwh, 0))
@@ -94,7 +118,16 @@ function dayLabel(day: string): string {
       </template>
     </PageHeader>
 
-    <div class="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+    <!--
+      Aperçus: energy today vs yesterday, an unusual room, the week by room - only the ones the
+      hub has data for. The card keeps the kit's narrow measure, so the figures sit beside it.
+    -->
+    <div class="mb-4 grid gap-3" :class="insightPages.length > 0 ? 'lg:grid-cols-[minmax(0,23.5rem)_1fr]' : ''">
+    <section v-if="insightPages.length > 0" class="rounded-2xl border border-base-300 bg-base-100 p-4">
+      <AiInsightCards :pages="insightPages" @ask="onAskInsight" @navigate="onNavigateInsight" />
+    </section>
+
+    <div class="grid content-start gap-3 sm:grid-cols-2" :class="insightPages.length > 0 ? '' : 'lg:grid-cols-4'">
       <StatTile label="Consommation" :value="data ? totalKwh.toFixed(1) : null" unit="kWh" icon="ph:lightning" :loading="loading" />
       <StatTile label="Coût" :value="data ? totalCost.toFixed(2) : null" :unit="currency" icon="ph:currency-eur" :loading="loading" />
       <StatTile
@@ -113,6 +146,7 @@ function dayLabel(day: string): string {
         :tone="data && data.live.total > 3000 ? 'warning' : 'default'"
         :loading="loading"
       />
+    </div>
     </div>
 
     <div class="grid gap-4 lg:grid-cols-[1fr_20rem]">

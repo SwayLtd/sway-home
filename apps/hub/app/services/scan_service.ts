@@ -12,6 +12,7 @@ import { bus } from '#services/event_bus'
 import { adapters } from '#services/adapter_manager'
 import { hosts, settings } from '#repositories/store'
 import { deviceRepository } from '#repositories/device_repository'
+import { SCAN_PHASES, scanPhaseState, tasks } from '#services/task_service'
 
 export interface ScanSummary {
   running: boolean
@@ -82,6 +83,15 @@ export const scanService = {
 
     bus.publish('scan.started', { payload: { quick: options.quick === true } })
 
+    // The scan as a task: its phases are the steps, and a phase passed is a step done.
+    const task = tasks.start({
+      kind: 'scan',
+      title: options.quick ? 'Scan rapide du réseau' : 'Scan complet du réseau',
+      steps: SCAN_PHASES.map((phase) => phase.label),
+      retry: { quick: options.quick === true, deep: options.deep === true },
+      onCancel: () => scanService.cancel(),
+    })
+
     try {
       const result = await scanNetwork({
         quick: options.quick,
@@ -92,6 +102,10 @@ export const scanService = {
           current.phase = phase
           current.hostCount = phase.found
           bus.publish('scan.progress', { payload: { ...phase } })
+          const state = scanPhaseState(phase)
+          for (let index = 0; index < state.index; index += 1) task.step(index, 'done')
+          task.step(state.index, 'running', state.detail)
+          task.progress(state.progress)
         },
       })
 
@@ -133,6 +147,8 @@ export const scanService = {
         interface: result.interface,
       })
 
+      task.done(`${result.hosts.length} hôte${result.hosts.length > 1 ? 's' : ''}, ${added} nouveau${added > 1 ? 'x' : ''}`)
+
       bus.publish('scan.finished', {
         payload: {
           hosts: result.hosts.length,
@@ -147,6 +163,7 @@ export const scanService = {
       return scanService.state()
     } catch (error) {
       current = { ...current, running: false, finishedAt: new Date().toISOString(), error: (error as Error).message, phase: null }
+      task.fail(current.error ?? 'Scan interrompu')
       bus.publish('system.error', { severity: 'warning', payload: { where: 'scan', message: current.error } })
       return scanService.state()
     } finally {
@@ -172,6 +189,9 @@ export const scanService = {
       .filter(({ fingerprint }) => (fingerprint?.confidence ?? 0) > 0.3 || (fingerprint?.suggestedAdapters?.length ?? 0) > 0)
   },
 }
+
+// "Réessayer" on a failed scan task runs the same kind of scan again.
+tasks.registerRunner('scan', (payload) => scanService.run({ quick: payload.quick === true, deep: payload.deep === true }))
 
 /** The gateway is almost always `.1` on a home subnet; good enough as a default. */
 function guessGateway(localIp: string): string | null {

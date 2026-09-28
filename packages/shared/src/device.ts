@@ -36,6 +36,34 @@ export const DEVICE_CATEGORIES = [
   'unknown',
 ] as const
 export type DeviceCategory = (typeof DEVICE_CATEGORIES)[number]
+
+/** A category in words, singular, the way the device table and the filters name it. */
+export const CATEGORY_LABEL: Record<DeviceCategory, string> = {
+  light: 'Lumière',
+  switch: 'Interrupteur',
+  outlet: 'Prise',
+  sensor: 'Capteur',
+  climate: 'Climat',
+  cover: 'Volet',
+  lock: 'Serrure',
+  camera: 'Caméra',
+  media: 'Lecteur',
+  speaker: 'Enceinte',
+  display: 'Écran',
+  appliance: 'Électroménager',
+  vacuum: 'Aspirateur',
+  energy: 'Énergie',
+  network: 'Réseau',
+  computer: 'Ordinateur',
+  phone: 'Téléphone',
+  wearable: 'Objet porté',
+  vehicle: 'Véhicule',
+  hub: 'Hub',
+  printer: 'Imprimante',
+  gateway: 'Passerelle',
+  unknown: 'Inconnu',
+}
+
 export const deviceCategorySchema = z.enum(DEVICE_CATEGORIES)
 
 export const TRANSPORTS = [

@@ -9,6 +9,7 @@
 
 import { describe, expect, test } from 'bun:test'
 import {
+  CATEGORY_LABEL,
   DEVICE_CATEGORIES,
   IDENTIFICATION_CONFIDENCE,
   TRANSPORTS,
@@ -76,6 +77,13 @@ describe('the vocabularies', () => {
     for (const transport of ['wifi', 'ethernet', 'matter', 'thread', 'zigbee', 'zwave', 'ble', 'mqtt', 'virtual']) {
       expect(TRANSPORTS).toContain(transport as never)
     }
+  })
+
+  test('every category has a French name, each its own', () => {
+    for (const category of DEVICE_CATEGORIES) expect(CATEGORY_LABEL[category]?.trim().length).toBeGreaterThan(0)
+    expect(new Set(Object.values(CATEGORY_LABEL)).size).toBe(DEVICE_CATEGORIES.length)
+    expect(CATEGORY_LABEL.light).toBe('Lumière')
+    expect(CATEGORY_LABEL.vacuum).toBe('Aspirateur')
   })
 
   test('identification confidence is an ordered scale', () => {

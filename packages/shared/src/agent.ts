@@ -143,6 +143,86 @@ export function commandRisk(command: string, deviceIsCritical = false): RiskLeve
 // Conversation
 // ---------------------------------------------------------------------------------------
 
+/**
+ * One thing the assistant did while answering, kept with the answer so the trace survives a
+ * reload: the reasoning it wrote between tool calls, and every tool call with what it
+ * returned. A tool entry whose `ok` is null never answered - the run was interrupted first.
+ */
+export const agentTraceEntrySchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('reasoning'), id: z.string(), text: z.string() }),
+  z.object({
+    kind: z.literal('tool'),
+    /** The provider's call id, so a live step and its saved entry are the same thing. */
+    id: z.string(),
+    name: z.string(),
+    args: z.record(z.string(), z.unknown()),
+    ok: z.boolean().nullable(),
+    summary: z.string(),
+    durationMs: z.number().int().min(0),
+  }),
+])
+export type AgentTraceEntry = z.infer<typeof agentTraceEntrySchema>
+
+export const AGENT_SOURCE_KINDS = ['device', 'area', 'memory', 'routine', 'scene', 'history', 'energy', 'timeline', 'network', 'alert'] as const
+
+/** What an answer was read from: cited next to the sentence it supports. */
+export const agentSourceSchema = z.object({
+  id: z.string(),
+  kind: z.enum(AGENT_SOURCE_KINDS),
+  title: z.string(),
+  subtitle: z.string().nullable().default(null),
+  /** A console path, never an external URL. */
+  href: z.string().nullable().default(null),
+  icon: z.string().nullable().default(null),
+})
+export type AgentSource = z.infer<typeof agentSourceSchema>
+
+/** A memory the assistant had in mind when it answered, shown as a context card. */
+export const agentContextItemSchema = z.object({
+  id: z.string(),
+  kind: z.enum(['memory', 'device', 'routine']),
+  title: z.string(),
+  excerpt: z.string(),
+  confidence: z.number().min(0).max(1).nullable().default(null),
+  meta: z.string().nullable().default(null),
+  href: z.string().nullable().default(null),
+})
+export type AgentContextItem = z.infer<typeof agentContextItemSchema>
+
+/**
+ * A question the assistant asks back instead of guessing ("Quelle lampe ?"). The run ends
+ * on it, and the answer comes back as the next message of the same conversation, so the
+ * conversation itself is the checkpoint.
+ */
+export const agentQuestionSchema = z.object({
+  id: z.string().min(1).max(40),
+  title: z.string().min(1).max(160),
+  description: z.string().max(400).optional(),
+  options: z
+    .array(z.object({ id: z.string().min(1).max(60), label: z.string().min(1).max(80), hint: z.string().max(160).optional() }))
+    .min(2)
+    .max(8),
+  multiple: z.boolean().default(false),
+  allowOther: z.boolean().default(false),
+})
+export type AgentQuestion = z.infer<typeof agentQuestionSchema>
+
+/**
+ * A command waiting for the answer to a question: "allume la lampe" asked "Quelle lampe ?"
+ * and keeps the command here, so the answer runs it without going through a model.
+ */
+export const agentPendingCommandSchema = z.object({
+  tool: z.string(),
+  args: z.record(z.string(), z.unknown()),
+  /** The argument the answer fills in. */
+  field: z.string(),
+  /** The question whose answer fills it. */
+  questionId: z.string(),
+  /** What the "all of them" option runs instead. */
+  all: z.object({ tool: z.string(), args: z.record(z.string(), z.unknown()) }).optional(),
+})
+export type AgentPendingCommand = z.infer<typeof agentPendingCommandSchema>
+
 export const agentMessageSchema = z.object({
   id: z.string(),
   conversationId: z.string(),
@@ -167,8 +247,26 @@ export const agentMessageSchema = z.object({
     .nullable()
     .default(null),
   createdAt: z.iso.datetime(),
+
+  // What the interface shows around an answer. Optional: a user message has none of it,
+  // and messages saved before the trace existed have none either.
+  trace: z.array(agentTraceEntrySchema).optional(),
+  sources: z.array(agentSourceSchema).optional(),
+  context: z.array(agentContextItemSchema).optional(),
+  questions: z.array(agentQuestionSchema).optional(),
+  pending: agentPendingCommandSchema.optional(),
+  /** The handles to take back what the run did, and to approve what it only proposed. */
+  actions: z.object({ undoIds: z.array(z.string()), proposalIds: z.array(z.string()) }).optional(),
+  feedback: z.enum(['up', 'down']).nullable().optional(),
+  model: z.object({ provider: z.string(), model: z.string() }).optional(),
+  /** The person left before the run finished: what is here is what was done. */
+  interrupted: z.boolean().optional(),
 })
 export type AgentMessage = z.infer<typeof agentMessageSchema>
+
+/** The part of a message kept in its `meta` column. */
+export const AGENT_MESSAGE_META_KEYS = ['trace', 'sources', 'context', 'questions', 'pending', 'actions', 'feedback', 'model', 'interrupted'] as const
+export type AgentMessageMeta = Pick<AgentMessage, (typeof AGENT_MESSAGE_META_KEYS)[number]>
 
 export const proposalSchema = z.object({
   id: z.string(),
@@ -252,6 +350,8 @@ export interface AgentToolResult {
   undo?: { deviceId: string; command: string; args: Record<string, unknown> }[]
   /** Returned instead of acting when the tool's risk exceeds the autonomy ceiling. */
   proposal?: Omit<Proposal, 'id' | 'status' | 'createdAt' | 'expiresAt' | 'decidedAt'>
+  /** Questions for the person: the run ends on them and waits for the answer. */
+  questions?: AgentQuestion[]
 }
 
 export const agentSettingsSchema = z.object({

@@ -181,6 +181,21 @@ export type Action = z.infer<typeof actionSchema>
 // Routine
 // ---------------------------------------------------------------------------------------
 
+/**
+ * Another way to do what a suggested routine does: a different trigger, sometimes a
+ * different condition. The actions stay; approving with an alternative replaces the parts it
+ * carries.
+ */
+export const routineAlternativeSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  description: z.string(),
+  triggers: z.array(triggerSchema).optional(),
+  conditions: z.array(z.custom<Condition>()).optional(),
+  actions: z.array(actionSchema).optional(),
+})
+export type RoutineAlternative = z.infer<typeof routineAlternativeSchema>
+
 export const routineSchema = z.object({
   id: z.string(),
   name: z.string(),
@@ -196,6 +211,10 @@ export const routineSchema = z.object({
   /** A routine the agent proposed but nobody approved yet does not run. */
   status: z.enum(['active', 'suggested', 'paused', 'archived']).default('active'),
   suggestionReason: z.string().nullable().default(null),
+  /** How sure the hub is about a suggestion, between 0 and 1. */
+  confidence: z.number().min(0).max(1).nullable().optional(),
+  /** Other ways to do the same thing, offered next to a suggestion. */
+  alternatives: z.array(routineAlternativeSchema).optional(),
   areaId: z.string().nullable().default(null),
   lastTriggeredAt: z.iso.datetime().nullable().default(null),
   runCount: z.number().int().min(0).default(0),

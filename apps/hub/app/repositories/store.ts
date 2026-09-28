@@ -7,7 +7,7 @@
  */
 
 import { randomUUID } from 'node:crypto'
-import type { Area, Floor, HouseMode, Memory, Proposal, Routine, Scene, AgentMessage, NetworkHost } from '@sway-home/shared'
+import { AGENT_MESSAGE_META_KEYS, type Area, type Floor, type HouseMode, type Memory, type Proposal, type Routine, type Scene, type AgentMessage, type AgentMessageMeta, type NetworkHost } from '@sway-home/shared'
 import { boolToInt, database, fromJson, insertInto, intToBool, nowIso, toJson, transaction, updateWhere } from '#db/database'
 
 type Row = Record<string, unknown>
@@ -210,6 +210,8 @@ function rowToRoutine(row: Row): Routine {
     authoredBy: String(row.authored_by) as Routine['authoredBy'],
     status: String(row.status) as Routine['status'],
     suggestionReason: row.suggestion_reason === null ? null : String(row.suggestion_reason),
+    confidence: row.confidence === null || row.confidence === undefined ? null : Number(row.confidence),
+    alternatives: fromJson<NonNullable<Routine['alternatives']>>(row.alternatives ?? null, []),
     areaId: row.area_id === null ? null : String(row.area_id),
     lastTriggeredAt: row.last_triggered_at === null ? null : String(row.last_triggered_at),
     runCount: Number(row.run_count),
@@ -250,6 +252,8 @@ export const routines = {
       authored_by: input.authoredBy,
       status: input.status,
       suggestion_reason: input.suggestionReason ?? null,
+      confidence: input.confidence ?? null,
+      alternatives: toJson(input.alternatives ?? []),
       area_id: input.areaId ?? null,
       last_triggered_at: null,
       run_count: 0,
@@ -270,6 +274,8 @@ export const routines = {
     if (patch.actions !== undefined) row.actions = toJson(patch.actions)
     if (patch.status !== undefined) row.status = patch.status
     if (patch.areaId !== undefined) row.area_id = patch.areaId
+    if (patch.confidence !== undefined) row.confidence = patch.confidence
+    if (patch.alternatives !== undefined) row.alternatives = toJson(patch.alternatives)
     updateWhere('routines', row, 'id = ?', [id])
     return routines.find(id)
   },
@@ -513,21 +519,65 @@ function rowToAlert(row: Row): Alert {
 // Agent: conversations, messages, memories, proposals
 // ---------------------------------------------------------------------------------------
 
+export interface ConversationSummary {
+  id: string
+  title: string
+  pinned: boolean
+  archived: boolean
+  updatedAt: string
+  messageCount: number
+}
+
+/** Lower case with the accents gone: "Lumières" and "lumieres" are the same search. */
+function fold(value: string): string {
+  return value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
+}
+
+const TITLE_MAX = 80
+
 export const conversations = {
-  all(limit = 40): { id: string; title: string; pinned: boolean; updatedAt: string; messageCount: number }[] {
-    return database()
-      .all<Row>(
-        `SELECT c.*, (SELECT COUNT(*) FROM agent_messages m WHERE m.conversation_id = c.id) AS message_count
-         FROM conversations c WHERE archived = 0 ORDER BY pinned DESC, updated_at DESC LIMIT ?`,
-        [limit]
-      )
+  /**
+   * The history, pinned first, then the most recently active. `archived` lists the archive
+   * instead; `q` keeps the conversations whose title or messages contain the words.
+   */
+  all(limit = 40, filter: { archived?: boolean; q?: string } = {}): ConversationSummary[] {
+    const query = filter.q?.trim() ? fold(filter.q.trim()) : null
+    const rows = database().all<Row>(
+      `SELECT c.*, COUNT(m.id) AS message_count${query ? ", GROUP_CONCAT(m.content, ' ') AS said" : ''}
+       FROM conversations c LEFT JOIN agent_messages m ON m.conversation_id = c.id
+       WHERE c.archived = ?
+       GROUP BY c.id
+       ORDER BY c.pinned DESC, c.updated_at DESC
+       LIMIT ?`,
+      [filter.archived ? 1 : 0, query ? 500 : limit]
+    )
+    return rows
+      .filter((row) => !query || fold(`${String(row.title)} ${String(row.said ?? '')}`).includes(query))
+      .slice(0, limit)
       .map((row) => ({
         id: String(row.id),
         title: String(row.title),
         pinned: intToBool(row.pinned),
+        archived: intToBool(row.archived),
         updatedAt: String(row.updated_at),
         messageCount: Number(row.message_count ?? 0),
       }))
+  },
+
+  /**
+   * Rename, pin, archive. Not activity: the conversation keeps its place in the history.
+   * A title is trimmed and bounded, and a blank one is ignored rather than saved.
+   */
+  update(id: string, patch: { title?: string; pinned?: boolean; archived?: boolean }): boolean {
+    const exists = database().get<Row>('SELECT id FROM conversations WHERE id = ?', [id])
+    if (!exists) return false
+    const values: Record<string, unknown> = {}
+    const title = patch.title?.trim().slice(0, TITLE_MAX)
+    if (title) values.title = title
+    if (typeof patch.pinned === 'boolean') values.pinned = boolToInt(patch.pinned)
+    if (typeof patch.archived === 'boolean') values.archived = boolToInt(patch.archived)
+    if (Object.keys(values).length > 0) updateWhere('conversations', values, 'id = ?', [id])
+    return true
   },
 
   create(title = 'New conversation'): string {
@@ -559,25 +609,29 @@ export const conversations = {
 }
 
 export const messages = {
+  /**
+   * The newest `limit` messages, oldest first: a transcript reads top to bottom, and a long
+   * conversation must show - and send to the model - its latest exchanges, not its first.
+   */
   forConversation(conversationId: string, limit = 200): AgentMessage[] {
     return database()
-      .all<Row>('SELECT * FROM agent_messages WHERE conversation_id = ? ORDER BY created_at LIMIT ?', [conversationId, limit])
-      .map((row) => ({
-        id: String(row.id),
-        conversationId: String(row.conversation_id),
-        role: String(row.role) as AgentMessage['role'],
-        content: String(row.content),
-        attachments: fromJson<AgentMessage['attachments']>(row.attachments, []),
-        toolCalls: fromJson<AgentMessage['toolCalls']>(row.tool_calls, []),
-        toolCallId: row.tool_call_id === null ? null : String(row.tool_call_id),
-        usage: fromJson<AgentMessage['usage']>(row.usage, null),
-        createdAt: String(row.created_at),
-      }))
+      .all<Row>(
+        `SELECT * FROM (SELECT rowid AS seq, * FROM agent_messages WHERE conversation_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?)
+         ORDER BY created_at, seq`,
+        [conversationId, limit]
+      )
+      .map(rowToMessage)
+  },
+
+  find(id: string): AgentMessage | null {
+    const row = database().get<Row>('SELECT * FROM agent_messages WHERE id = ?', [id])
+    return row ? rowToMessage(row) : null
   },
 
   append(message: Omit<AgentMessage, 'id' | 'createdAt'> & { id?: string; createdAt?: string }): AgentMessage {
     const id = message.id ?? randomUUID()
     const createdAt = message.createdAt ?? nowIso()
+    const meta = pickMeta(message)
     insertInto('agent_messages', {
       id,
       conversation_id: message.conversationId,
@@ -587,11 +641,45 @@ export const messages = {
       tool_calls: toJson(message.toolCalls ?? []),
       tool_call_id: message.toolCallId ?? null,
       usage: message.usage ? toJson(message.usage) : null,
+      meta: meta ? toJson(meta) : null,
       created_at: createdAt,
     })
     conversations.touch(message.conversationId)
     return { ...message, id, createdAt } as AgentMessage
   },
+
+  /** Changes what surrounds an answer (its feedback, say) without touching the answer. */
+  patchMeta(id: string, patch: Partial<AgentMessageMeta>): AgentMessage | null {
+    const current = messages.find(id)
+    if (!current) return null
+    const next = { ...current, ...patch }
+    const meta = pickMeta(next)
+    updateWhere('agent_messages', { meta: meta ? toJson(meta) : null }, 'id = ?', [id])
+    return next
+  },
+}
+
+function pickMeta(message: Partial<AgentMessage>): AgentMessageMeta | null {
+  const meta: Record<string, unknown> = {}
+  for (const key of AGENT_MESSAGE_META_KEYS) {
+    if (message[key] !== undefined) meta[key] = message[key]
+  }
+  return Object.keys(meta).length > 0 ? (meta as AgentMessageMeta) : null
+}
+
+function rowToMessage(row: Row): AgentMessage {
+  return {
+    id: String(row.id),
+    conversationId: String(row.conversation_id),
+    role: String(row.role) as AgentMessage['role'],
+    content: String(row.content),
+    attachments: fromJson<AgentMessage['attachments']>(row.attachments, []),
+    toolCalls: fromJson<AgentMessage['toolCalls']>(row.tool_calls, []),
+    toolCallId: row.tool_call_id === null ? null : String(row.tool_call_id),
+    usage: fromJson<AgentMessage['usage']>(row.usage, null),
+    createdAt: String(row.created_at),
+    ...fromJson<AgentMessageMeta>(row.meta ?? null, {}),
+  }
 }
 
 export const memories = {
@@ -758,7 +846,7 @@ export interface UndoEntry {
 }
 
 export const undo = {
-  push(input: { description: string; origin?: string; commands: UndoEntry['commands']; ttlMinutes?: number }): UndoEntry {
+  push(input: { description: string; origin?: string; commands: UndoEntry['commands']; ttlMinutes?: number; correlationId?: string | null }): UndoEntry {
     const id = randomUUID()
     const at = nowIso()
     const expiresAt = new Date(Date.now() + (input.ttlMinutes ?? 30) * 60_000).toISOString()
@@ -770,6 +858,7 @@ export const undo = {
       commands: toJson(input.commands),
       applied: 0,
       expires_at: expiresAt,
+      correlation_id: input.correlationId ?? null,
     })
     return { id, at, description: input.description, origin: input.origin ?? 'agent', commands: input.commands, applied: false, expiresAt }
   },
@@ -795,6 +884,13 @@ export const undo = {
 
   markApplied(id: string): void {
     updateWhere('undo_entries', { applied: 1 }, 'id = ?', [id])
+  },
+
+  /** The entries one run pushed, oldest first: what its "Annuler" takes back. */
+  forCorrelation(correlationId: string): string[] {
+    return database()
+      .all<Row>('SELECT id FROM undo_entries WHERE correlation_id = ? AND applied = 0 ORDER BY at, rowid', [correlationId])
+      .map((row) => String(row.id))
   },
 }
 

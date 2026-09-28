@@ -122,6 +122,10 @@ export function useHouse() {
   const loading = useState<boolean>('house-loading', () => false)
   const failed = useState<string | null>('house-failed', () => null)
 
+  // Live-only state the stream also carries: what the hub is busy with, and a recording.
+  const tasks = useState<HubTask[]>('hub-tasks', () => [])
+  const teachStatus = useState<TeachStatus>('hub-teach', () => ({ ...TEACH_IDLE }))
+
   const deviceById = computed(() => new Map(devices.value.map((device) => [device.id, device])))
   const areaById = computed(() => new Map(areas.value.map((area) => [area.id, area])))
 
@@ -149,6 +153,17 @@ export function useHouse() {
    * and every component holding a reference re-renders. No refetch, no invalidation.
    */
   function applyEvent(event: HouseEvent): void {
+    // A task reports every step and a recording every gesture: state, not history, so they
+    // update their own store and stay out of the activity feed.
+    if (event.type === 'task.updated') {
+      tasks.value = upsertTask(tasks.value, event.payload as HubTask)
+      return
+    }
+    if (event.type === 'teach.updated') {
+      teachStatus.value = event.payload as TeachStatus
+      return
+    }
+
     events.value = [event, ...events.value].slice(0, 300)
 
     switch (event.type) {
